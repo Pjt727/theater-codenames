@@ -1,0 +1,6 @@
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+reportWildcardImportFromLibrary = "none"
+reportCallIssue = "none"
