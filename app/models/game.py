@@ -63,14 +63,16 @@ class Game(Base):
     def __ft__(self):
         game_cards = session.scalars(
             select(GameCard).filter(GameCard.game == self).order_by(asc(GameCard.state))
+        ).all()
+        return Table(cls="table")(
+            Thead(*([Th(cls="col-3")] * CARDS_PER_ROW)),
+            Tbody(
+                *[
+                    Tr(*game_cards[i : i + CARDS_PER_ROW])
+                    for i in range(0, CARDS_PER_GAME, CARDS_PER_ROW)
+                ]
+            ),
         )
-        card_elements = []
-        for i, game_card in enumerate(game_cards, start=1):
-            card_elements.append(game_card)
-            if i % 5 == 0:
-                card_elements.append(Br())
-        print(card_elements)
-        return Div(*card_elements)
 
     @staticmethod
     def create() -> "Game":
@@ -85,12 +87,12 @@ class Game(Base):
         if random.random() < 0.5:
             red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
             blue = [GameCardKind.BLUE] * GUESS_AMOUNT
-            tan = [GameCardKind.BLUE] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
+            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
             kinds = red + blue + tan
         else:
             red = [GameCardKind.RED] * GUESS_AMOUNT
             blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
-            tan = [GameCardKind.BLUE] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
+            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
             kinds = red + blue + tan
 
         assert len(random_cards) == CARDS_PER_GAME
@@ -139,7 +141,6 @@ class GameCard(Base):
         return index
 
     def __ft__(self):
-        return Div(
-            cls=f"{self.state.to_bs_class()} p-3 d-inline border",
-            style="width: 100px; length: 200px;",
+        return Td(
+            cls=f"{self.state.to_bs_class()} m-3 d-inline border col-3",
         )(self.card_phrase)
