@@ -22,7 +22,7 @@ def CardBoard(card: GameCard, is_spy_master: bool = False):
 
 def GameBoard(game: Game):
     game_cards = session.scalars(
-        select(GameCard).filter(GameCard.game == game).order_by(asc(GameCard.rowid))
+        select(GameCard).filter(GameCard.game == game).order_by(asc(GameCard.index))
     ).all()
     return Table(cls="table")(
         Tbody(
@@ -68,19 +68,19 @@ def play(request: Request):
         Div(
             Span(cls="pe-3")(
                 "Red:",
-                Span(id=GameCardKind.RED)(f"0/{red}"),
+                Span(id=repr(GameCardKind.RED))(f"0/{red}"),
             ),
             Span(cls="pe-3")(
                 "Blue:",
-                Span(id=GameCardKind.BLUE)(f"0/{blue}"),
+                Span(id=repr(GameCardKind.BLUE))(f"0/{blue}"),
             ),
             Span(cls="pe-3")(
                 "Black:",
-                Span(id=GameCardKind.BLACK)(f"0/{black}"),
+                Span(id=repr(GameCardKind.BLACK))(f"0/{black}"),
             ),
             Span(cls="pe-3")(
                 "Tan:",
-                Span(id=GameCardKind.TAN)(f"0/{tan}"),
+                Span(id=repr(GameCardKind.TAN))(f"0/{tan}"),
             ),
         ),
     )
@@ -106,9 +106,7 @@ def guess(game_card_id: int):
         .filter(GameCard.game_code == game_card.game_code)
         .filter(GameCard.is_guessed == True)
     )
-    print(guess_card_count)
-    print(str(game_card.kind))
-    print(f"{guess_card_count}/{same_card_count}")
-    return CardBoard(game_card), Span(
-        id=game_card.kind, hx_swap_oob=f"outerHTML:#{game_card.kind}"
-    )(f"{guess_card_count}/{same_card_count}")
+    return (
+        CardBoard(game_card),
+        Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
+    )

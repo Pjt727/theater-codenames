@@ -38,34 +38,37 @@ class Card(Base):
 class Game(Base):
     __tablename__ = "Games"
     code: Mapped[str] = mapped_column(String(), primary_key=True)
-
+    is_reds_turn: Mapped[Boolean] = mapped_column(Boolean())
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
 
     @staticmethod
     def create() -> "Game":
-        random_string = "".join(random.choices(string.digits, k=6))
+        # figure out who goes first and gets the additional
+        #     card
+        if random.random() < 0.5:
+            red_is_first = True
+            red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
+            blue = [GameCardKind.BLUE] * GUESS_AMOUNT
+        else:
+            red_is_first = False
+            red = [GameCardKind.RED] * GUESS_AMOUNT
+            blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
+        black = [GameCardKind.BLACK] * BLACK_AMOUNT
+        tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1) - BLACK_AMOUNT)
+        kinds = red + blue + black + tan
+        random.shuffle(kinds)
+
         # TODO ensure random string is not already in the db
-        game = Game(code=random_string)
+        random_string = "".join(random.choices(string.digits, k=6))
+        game = Game(code=random_string, is_reds_turn=red_is_first)
 
         random_cards = session.scalars(
+            # Is there a sqlite way to seed the results
+            #   might be useful for two people using this and the same word list
+            #   would get the same words
             select(Card).order_by(func.random()).limit(CARDS_PER_GAME)
         ).all()
         assert len(random_cards) == CARDS_PER_GAME
-        if random.random() < 0.5:
-            red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
-            blue = [GameCardKind.BLUE] * GUESS_AMOUNT
-            black = [GameCardKind.BLACK] * BLACK_AMOUNT
-            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1) - BLACK_AMOUNT)
-            kinds = red + blue + black + tan
-        else:
-            red = [GameCardKind.RED] * GUESS_AMOUNT
-            blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
-            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
-            kinds = red + blue + tan
-
-        assert len(random_cards) == CARDS_PER_GAME
-        random.shuffle(kinds)
-
         # create all game cards
         game_cards = [
             GameCard(
@@ -94,10 +97,14 @@ class GameCardKind(PyEnum):
         elif self == GameCardKind.BLUE:
             return "bg-primary-subtle"
         elif self == GameCardKind.BLACK:
-            return "bg-black"
+            return "text-light bg-black"
         elif self == GameCardKind.TAN:
             return "bg-warning-subtle"
         raise ValueError("Unexpected enum")
+
+    def __repr__(self) -> str:
+        # id's don't work well with .'s
+        return f"game_card_kind_{self.name}"
 
 
 class GameCard(Base):
