@@ -41,6 +41,16 @@ class Game(Base):
     is_reds_turn: Mapped[Boolean] = mapped_column(Boolean())
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
 
+    def count_cards(self, kind: "GameCardKind") -> int:
+        count = session.scalar(
+            select(func.count())
+            .select_from(GameCard)
+            .filter(GameCard.kind == kind)
+            .filter(GameCard.game == self)
+        )
+        assert count is not None
+        return count
+
     @staticmethod
     def create() -> "Game":
         # figure out who goes first and gets the additional
