@@ -23,6 +23,8 @@ from typing import Optional
 
 CARDS_PER_GAME = 25
 GUESS_AMOUNT = 8
+BLACK_AMOUNT = 1
+assert CARDS_PER_GAME > (GUESS_AMOUNT * 2 + 1) + BLACK_AMOUNT
 CARDS_PER_ROW = 5
 
 
@@ -33,46 +35,11 @@ class Card(Base):
     game_cards: Mapped[list["GameCard"]] = relationship(back_populates="card")
 
 
-class GameCardState(PyEnum):
-    UNGUESSED = "Unguessed"
-    RED = "Red"
-    BLUE = "Blue"
-    BLACK = "Black"
-    TAN = "Tan"
-
-    def to_bs_class(self) -> str:
-        if self == GameCardState.UNGUESSED:
-            return ""
-        elif self == GameCardState.RED:
-            return "--bs-danger-border-subtle"
-        elif self == GameCardState.BLUE:
-            return "--bs-info-border-subtle"
-        elif self == GameCardState.BLACK:
-            return "--bs-dark-border-subtle"
-        elif self == GameCardState.TAN:
-            return "--bs-warning-border-subtle"
-        raise ValueError("Unexpected enum")
-
-
 class Game(Base):
     __tablename__ = "Games"
     code: Mapped[str] = mapped_column(String(), primary_key=True)
 
-    cards: Mapped["GameCard"] = relationship(back_populates="game")
-
-    def __ft__(self):
-        game_cards = session.scalars(
-            select(GameCard).filter(GameCard.game == self).order_by(asc(GameCard.state))
-        ).all()
-        return Table(cls="table")(
-            Thead(*([Th(cls="col-3")] * CARDS_PER_ROW)),
-            Tbody(
-                *[
-                    Tr(*game_cards[i : i + CARDS_PER_ROW])
-                    for i in range(0, CARDS_PER_GAME, CARDS_PER_ROW)
-                ]
-            ),
-        )
+    cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
 
     @staticmethod
     def create() -> "Game":
@@ -87,8 +54,9 @@ class Game(Base):
         if random.random() < 0.5:
             red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
             blue = [GameCardKind.BLUE] * GUESS_AMOUNT
-            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1))
-            kinds = red + blue + tan
+            black = [GameCardKind.BLACK] * BLACK_AMOUNT
+            tan = [GameCardKind.TAN] * (CARDS_PER_GAME - (GUESS_AMOUNT * 2 + 1) - BLACK_AMOUNT)
+            kinds = red + blue + black + tan
         else:
             red = [GameCardKind.RED] * GUESS_AMOUNT
             blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
@@ -101,7 +69,7 @@ class Game(Base):
         # create all game cards
         game_cards = [
             GameCard(
-                state=GameCardState.UNGUESSED,
+                is_guessed=False,
                 card_phrase=card.phrase,
                 game_code=game.code,
                 index=i,
@@ -118,12 +86,24 @@ class GameCardKind(PyEnum):
     RED = "Red"
     BLUE = "Blue"
     TAN = "Tan"
+    BLACK = "Black"
+
+    def to_bs_class(self) -> str:
+        if self == GameCardKind.RED:
+            return "bg-danger-subtle"
+        elif self == GameCardKind.BLUE:
+            return "bg-primary-subtle"
+        elif self == GameCardKind.BLACK:
+            return "bg-black"
+        elif self == GameCardKind.TAN:
+            return "bg-warning-subtle"
+        raise ValueError("Unexpected enum")
 
 
 class GameCard(Base):
     __tablename__ = "GameCards"
 
-    state: Mapped[GameCardState] = mapped_column(Enum(GameCardState), primary_key=True)
+    is_guessed = mapped_column(Boolean(), primary_key=True)
     card_phrase: Mapped[str] = mapped_column(String(), ForeignKey("Cards.phrase"), primary_key=True)
     game_code: Mapped[str] = mapped_column(String(), ForeignKey("Games.code"), primary_key=True)
     kind: Mapped[GameCardKind] = mapped_column(Enum(GameCardKind))
@@ -131,6 +111,7 @@ class GameCard(Base):
     index: Mapped[int] = mapped_column(Integer())
 
     card: Mapped["Card"] = relationship(back_populates="game_cards")
+
     game: Mapped["Game"] = relationship(back_populates="cards")
     __table_args__ = (UniqueConstraint("index", "game_code", name="uq_index_game_code"),)
 
@@ -139,8 +120,3 @@ class GameCard(Base):
         if index >= CARDS_PER_GAME or index < 0:
             raise ValueError(f"Invalid index of {index} must be in range")
         return index
-
-    def __ft__(self):
-        return Td(
-            cls=f"{self.state.to_bs_class()} m-3 d-inline border col-3",
-        )(self.card_phrase)
