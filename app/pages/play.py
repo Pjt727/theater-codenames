@@ -17,7 +17,7 @@ def CardBoard(card: GameCard, is_spy_master: bool = False):
     }
     return Td(
         cls=f"border {card.kind.to_bs_class() if card.is_guessed or is_spy_master else ""} p-3",
-        **(hx_attributes if not card.is_guessed else {}),
+        **({} if card.is_guessed else hx_attributes),
     )(card.card_phrase)
 
 
@@ -26,7 +26,7 @@ def GameBoard(game: Game):
     return Table(cls="table")(
         Tbody(
             *[
-                Tr(*[CardBoard(game) for game in game_cards[i : i + CARDS_PER_ROW]])
+                Tr(*[CardBoard(game_card) for game_card in game_cards[i : i + CARDS_PER_ROW]])
                 for i in range(0, CARDS_PER_GAME, CARDS_PER_ROW)
             ]
         ),
