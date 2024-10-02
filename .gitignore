@@ -4,3 +4,4 @@ venv
 *.sqlite3
 __pycache__
 **/__pycache__
+scratch_pad/

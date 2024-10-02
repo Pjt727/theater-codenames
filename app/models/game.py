@@ -38,7 +38,6 @@ class Card(Base):
 class Game(Base):
     __tablename__ = "Games"
     code: Mapped[str] = mapped_column(String(), primary_key=True)
-    is_reds_turn: Mapped[Boolean] = mapped_column(Boolean())
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
 
     @staticmethod
@@ -46,11 +45,9 @@ class Game(Base):
         # figure out who goes first and gets the additional
         #     card
         if random.random() < 0.5:
-            red_is_first = True
             red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
             blue = [GameCardKind.BLUE] * GUESS_AMOUNT
         else:
-            red_is_first = False
             red = [GameCardKind.RED] * GUESS_AMOUNT
             blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
         black = [GameCardKind.BLACK] * BLACK_AMOUNT
@@ -59,8 +56,9 @@ class Game(Base):
         random.shuffle(kinds)
 
         # TODO ensure random string is not already in the db
-        random_string = "".join(random.choices(string.digits, k=6))
-        game = Game(code=random_string, is_reds_turn=red_is_first)
+        random_string = "".join(random.choices(string.ascii_uppercase, k=6))
+        game = Game(code=random_string)
+        session.add(game)
 
         random_cards = session.scalars(
             # Is there a sqlite way to seed the results

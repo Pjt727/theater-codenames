@@ -1,6 +1,7 @@
 from fasthtml.common import *
 from sqlalchemy import func
 from models.game import *
+from sqlalchemy.orm import joinedload
 from starlette.requests import Request
 from make_app import app, PARTIALS_PREFIX
 from pages.components import Page
@@ -21,9 +22,7 @@ def CardBoard(card: GameCard, is_spy_master: bool = False):
 
 
 def GameBoard(game: Game):
-    game_cards = session.scalars(
-        select(GameCard).filter(GameCard.game == game).order_by(asc(GameCard.index))
-    ).all()
+    game_cards = game.cards
     return Table(cls="table")(
         Tbody(
             *[
@@ -36,34 +35,32 @@ def GameBoard(game: Game):
 
 @app.get("/play")
 def play(request: Request):
+    return Page(request, "Play", Button("Make Random Game", hx_post=app.url_path_for("play")))
+
+
+@app.post("/play")
+def make_game():
     game = Game.create()
-    red = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == GameCardKind.RED)
-        .filter(GameCard.game == game)
+    return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
+
+
+@app.get("/play/{game_code:str}")
+def play_game(request: Request):
+    game_code = request.path_params["game_code"]
+    print(game_code)
+    game = session.scalar(
+        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
     )
-    blue = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == GameCardKind.BLUE)
-        .filter(GameCard.game == game)
-    )
-    black = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == GameCardKind.BLACK)
-        .filter(GameCard.game == game)
-    )
-    tan = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == GameCardKind.TAN)
-        .filter(GameCard.game == game)
-    )
+    if game is None:
+        return HttpHeader("HX-Redirect", app.url_path_for("play"))
+    print("holl")
+    red = len([c for c in game.cards if c.kind == GameCardKind.RED])
+    blue = len([c for c in game.cards if c.kind == GameCardKind.BLUE])
+    black = len([c for c in game.cards if c.kind == GameCardKind.BLACK])
+    tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
     return Page(
         request,
-        play,
+        "Play",
         GameBoard(game),
         Div(
             Span(cls="pe-3")(
@@ -110,3 +107,8 @@ def guess(game_card_id: int):
         CardBoard(game_card),
         Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
     )
+
+
+@app.post("/toggle_spymaster")
+def toggle_spymaster(game_card_id: int):
+    return ()
