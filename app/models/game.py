@@ -26,6 +26,7 @@ GUESS_AMOUNT = 8
 BLACK_AMOUNT = 1
 assert CARDS_PER_GAME > (GUESS_AMOUNT * 2 + 1) + BLACK_AMOUNT
 CARDS_PER_ROW = 5
+GAME_CODE_SIZE = 6
 
 
 class Card(Base):
@@ -56,7 +57,7 @@ class Game(Base):
         random.shuffle(kinds)
 
         # TODO ensure random string is not already in the db
-        random_string = "".join(random.choices(string.ascii_uppercase, k=6))
+        random_string = "".join(random.choices(string.ascii_uppercase, k=GAME_CODE_SIZE))
         game = Game(code=random_string)
         session.add(game)
 
