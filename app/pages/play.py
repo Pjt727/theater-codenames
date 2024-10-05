@@ -1,9 +1,11 @@
 from fasthtml.common import *
 from sqlalchemy import func
 from models.game import *
+from models.errors import *
 from sqlalchemy.orm import joinedload
 from starlette.requests import Request
 from make_app import app, PARTIALS_PREFIX
+from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
 
 
@@ -69,10 +71,28 @@ def SpyMasterButton(game_code: str, is_spy_master: bool):
 
 @app.get("/play")
 def play(request: Request):
+    tags = session.scalars(select(Tag)).all()
     return Page(
         request,
         "Play",
-        Button("Make Random Game", cls="btn btn-primary", hx_post=app.url_path_for("play")),
+        Form(cls="pt-5", hx_post=app.url_path_for("play"), hx_swap="none")(
+            Div(cls="d-flex")(
+                Button(
+                    "Make Random Game",
+                    type="submit",
+                    cls="btn btn-primary me-3",
+                ),
+                *[
+                    (
+                        Input(
+                            name=f"tag-{tag.rowid}", cls="form-check-input me-2", type="checkbox"
+                        ),
+                        Label(tag.name, cls="me-3"),
+                    )
+                    for tag in tags
+                ],
+            )
+        ),
         Form(cls="pt-5", hx_post=app.url_path_for("find_game"), hx_swap="none")(
             Div(cls="d-flex")(
                 Button("Find Game", cls="btn btn-primary me-2", type="submit"),
@@ -93,8 +113,70 @@ def play(request: Request):
 
 
 @app.post("/play")
-def make_game():
-    game = Game.create()
+async def make_game(request: Request, session_id: int | None = None):
+    try:
+        foo = await request.form()
+    except MultipartParseError:
+        # I am not sure if there is a better way to check if form() will work
+        return Message(Div(f"Please select some categories for the game"), kind=MessageKind.ERROR)
+
+    # Extract the tags... I wonder if there is a better way to send this information using
+    #   forms... Maybe it would just be better to us more client side js?
+    # A bit a js maybe in the hx-vals of the form could check which are enabled bc
+    #   doing it this way seems a bit hacky
+    tag_prefix = "tag-"
+    tag_ids: list[int] = []
+    for key in foo.keys():
+        if not key.startswith(tag_prefix):
+            continue
+        try:
+            tag_ids.append(int(key[len(tag_prefix) :]))
+        except ValueError:
+            # should never happen unless someone messes with requests
+            return Message(Div("Malformed tag item"), kind=MessageKind.ERROR)
+
+    if session_id is None:
+        game_session = Session()
+        session.add(game_session)
+        # need to generate that id
+        session.flush()
+        groupers = [
+            SessionTagGrouper(session_id=game_session.id, tag_id=tag_id) for tag_id in tag_ids
+        ]
+        session.add_all(groupers)
+        session.flush()
+    else:
+        # TODO and some type of validation so other people
+        #    can't mess with session of others
+        # Current idea is to require one of the past game codes be sent with
+        #    this request
+        # Since I do not want to make people log in this seems like a relatively
+        #    secure option because as now people may just hit this url with a any session_id
+        game_session = Session.get(session_id)
+
+    try:
+        game = game_session.create_game()
+    except NotEnoughCards as err:
+        session.rollback()
+        if session_id is None:
+            # this was the first session that was being made which means
+            #   the tags cards was not enough to fill a single game
+            return Message(
+                Div(
+                    f"You need {err.needed_cards} to play a game but those tags only add up to {err.cards_left}"
+                ),
+                kind=MessageKind.ERROR,
+            )
+        # the other case that they finsihed the session by playing
+        #   pretty much all the cards
+        return Message(
+            Div(
+                f"There's only {err.cards_left} cards left to play within this session and you need {err.needed_cards} to play a game!"
+            ),
+            kind=MessageKind.ERROR,
+        )
+
+    session.commit()
     return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
 
 
@@ -147,6 +229,14 @@ def play_game(request: Request):
             ),
         ),
         SpyMasterButton(game.code, False),
+        Button(
+            "New Game",
+            cls="btn btn-success",
+            hx_post=app.url_path_for("make_game"),
+            hx_swap="none",
+            hx_vals={"session_id": game.session_id},
+        ),
+        MessageStack(),
     )
 
 
