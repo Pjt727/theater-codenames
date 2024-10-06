@@ -133,6 +133,9 @@ class Game(Base):
     __tablename__ = "Games"
     code: Mapped[str] = mapped_column(String(), primary_key=True)
     session_id: Mapped[int] = mapped_column(Integer(), ForeignKey("Sessions.id"))
+    # integrity does not really matter as much for this because it should only be used
+    #   to match game state
+    last_game_card_id: Mapped[Optional[int]] = mapped_column(Integer())
 
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
     session: Mapped["Session"] = relationship(back_populates="games")

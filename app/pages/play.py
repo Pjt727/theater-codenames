@@ -39,10 +39,22 @@ def CardBoard(card: GameCard, is_spy_master: bool = False):
     )
 
 
-def GameBoard(game: Game, is_spy_master: bool = False):
+def GamePolling(game: Game):
+    return Div(
+        id="game_polling",
+        hx_trigger="every 500ms",
+        hx_swap_oob="true",
+        hx_get=app.url_path_for("update_game", game_code=game.code),
+        hx_vals=f'js:{{"last_game_card_id": {game.last_game_card_id if game.last_game_card_id else -1}, "is_spy_master": JSON.parse(qs("#spyMasterToggle").getAttribute("hx-vals"))["is_spy_master"]}}',
+        hidden=True,
+    )
+
+
+def GameBoard(game: Game, is_spy_master: bool = False, is_update: bool = False):
     game_cards = game.cards
-    return Table(cls="table", id="gameBoard")(
+    return Table(cls="table", id="gameBoard", hx_swap_oob="true" if is_update else None)(
         Tbody(
+            GamePolling(game),
             *[
                 Tr(
                     *[
@@ -51,7 +63,7 @@ def GameBoard(game: Game, is_spy_master: bool = False):
                     ]
                 )
                 for i in range(0, CARDS_PER_GAME, CARDS_PER_ROW)
-            ]
+            ],
         ),
     )
 
@@ -76,6 +88,10 @@ def play(request: Request):
         request,
         "Play",
         Form(cls="pt-5", hx_post=app.url_path_for("play"), hx_swap="none")(
+            # surely there is a better way... for some reason I get parse errors
+            #   on empty messages
+            # seems to be an open issue: https://github.com/Kludex/python-multipart/issues/38
+            Input(name="dummy_value", value="1", hidden=True),
             Div(cls="d-flex")(
                 Button(
                     "Make Random Game",
@@ -91,7 +107,7 @@ def play(request: Request):
                     )
                     for tag in tags
                 ],
-            )
+            ),
         ),
         Form(cls="pt-5", hx_post=app.url_path_for("find_game"), hx_swap="none")(
             Div(cls="d-flex")(
@@ -115,8 +131,9 @@ def play(request: Request):
 @app.post("/play")
 async def make_game(request: Request, session_id: int | None = None):
     try:
-        foo = await request.form()
+        form_data = await request.form()
     except MultipartParseError:
+        # since it is parsed early this error on an empty form would also happen early
         # I am not sure if there is a better way to check if form() will work
         return Message(Div(f"Please select some categories for the game"), kind=MessageKind.ERROR)
 
@@ -126,7 +143,7 @@ async def make_game(request: Request, session_id: int | None = None):
     #   doing it this way seems a bit hacky
     tag_prefix = "tag-"
     tag_ids: list[int] = []
-    for key in foo.keys():
+    for key in form_data.keys():
         if not key.startswith(tag_prefix):
             continue
         try:
@@ -163,7 +180,7 @@ async def make_game(request: Request, session_id: int | None = None):
             #   the tags cards was not enough to fill a single game
             return Message(
                 Div(
-                    f"You need {err.needed_cards} to play a game but those tags only add up to {err.cards_left}"
+                    f"You need {err.needed_cards} cards to play a game but those tags only add up to {err.cards_left} cards."
                 ),
                 kind=MessageKind.ERROR,
             )
@@ -240,11 +257,47 @@ def play_game(request: Request):
     )
 
 
+# everything is an oob swap to make it easier to maybe do web connections later for
+#   updating the game state
+@app.get("/update/{game_code:str}")
+def update_game(request: Request, is_spy_master: bool, last_game_card_id: int | None = None):
+    game_code = request.path_params["game_code"]
+    game = session.scalar(
+        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+    )
+    if game is None:
+        return HttpHeader("HX-Redirect", app.url_path_for("play"))
+
+    # only update the game if the last game card guess is the same
+    # there is a slight problem with this in that game may still become inconsistant
+    #   but I think it is good enough
+    if game.last_game_card_id == last_game_card_id:
+        return
+
+    red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
+    red = len([c for c in game.cards if c.kind == GameCardKind.RED])
+    blue_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed])
+    blue = len([c for c in game.cards if c.kind == GameCardKind.BLUE])
+    black_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLACK and c.is_guessed])
+    black = len([c for c in game.cards if c.kind == GameCardKind.BLACK])
+    tan_guessed = len([c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed])
+    tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
+    return (
+        GameBoard(game, is_spy_master=is_spy_master, is_update=True),
+        Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
+        Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
+        Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
+        Span(id=repr(GameCardKind.TAN), hx_swap_oob="true")(f"{tan_guessed}/{tan}"),
+    )
+
+
 @app.post(f"{PARTIALS_PREFIX}/guess_card")
 def guess(game_card_id: int, is_spy_master: bool):
     game_card = GameCard.get(game_card_id)
+    game = game_card.game
     assert not game_card.is_guessed
     game_card.is_guessed = True
+    game.last_game_card_id = game_card_id
     session.commit()
     same_card_count = session.scalar(
         select(func.count())
@@ -263,6 +316,7 @@ def guess(game_card_id: int, is_spy_master: bool):
     return (
         CardBoard(game_card, is_spy_master),
         Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
+        GamePolling(game),
     )
 
 
