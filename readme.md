@@ -5,8 +5,9 @@ the game on a larger external display which may be in addition to the actual boa
 
 ## Features
 - [x] codenames gameplay loop
-- [ ]various wordbanks to choose from
+    - with minimal inteface (e.i. not keeping track of turns to minimize buttons pressed)
+    - communication / turns is dealt outside of the game 
+- [x] various wordbanks to choose from
 - [ ]upload picture board to website and have it populate the board
-    - should be implemented where one device can upload and another can view
 - [ ]option to save hints and guess order
-- game history
+- [ ] game history
