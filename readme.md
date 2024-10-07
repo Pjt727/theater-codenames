@@ -8,6 +8,6 @@ the game on a larger external display which may be in addition to the actual boa
     - with minimal inteface (e.i. not keeping track of turns to minimize buttons pressed)
     - communication / turns is dealt outside of the game 
 - [x] various wordbanks to choose from
-- [ ]upload picture board to website and have it populate the board
-- [ ]option to save hints and guess order
+- [ ] upload picture board to website and have it populate the board
+- [ ] option to save hints and guess order
 - [ ] game history
