@@ -22,6 +22,7 @@ BASE_CARDS_DIR = "cards"
 #   under a single tag/ category e.i. computer science
 # words may be parts of many different categorys
 def create_default_words():
+    # related words for computer science found from the relatedwords.io game
     files_tags_to_source_from = [("compsci.txt", "Computer Science"), ("general.txt", "Base Game")]
 
     for file_name, tag in files_tags_to_source_from:

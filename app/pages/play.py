@@ -1,5 +1,5 @@
 from fasthtml.common import *
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from models.game import *
 from models.errors import *
 from sqlalchemy.orm import joinedload
@@ -9,9 +9,9 @@ from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
 
 
-def CardBoard(card: GameCard, is_spy_master: bool = False):
+def CardBoard(card: GameCard, game: Game, is_spy_master: bool = False):
     active_attributes = {
-        "hx_post": app.url_path_for("guess"),
+        "hx_post": app.url_path_for("guess", game_code=game.code),
         "hx_swap": "outerHTML",
         "hx_trigger": "click",
         # I think there might be a better way to do this
@@ -58,7 +58,7 @@ def GameBoard(game: Game, is_spy_master: bool = False, is_update: bool = False):
             *[
                 Tr(
                     *[
-                        CardBoard(game_card, is_spy_master)
+                        CardBoard(game_card, game, is_spy_master)
                         for game_card in game_cards[i : i + CARDS_PER_ROW]
                     ]
                 )
@@ -94,7 +94,7 @@ def play(request: Request):
             Input(name="dummy_value", value="1", hidden=True),
             Div(cls="d-flex")(
                 Button(
-                    "Make Random Game",
+                    "Make Game",
                     type="submit",
                     cls="btn btn-primary me-3",
                 ),
@@ -129,7 +129,7 @@ def play(request: Request):
 
 
 @app.post("/play")
-async def make_game(request: Request, session_id: int | None = None):
+async def make_game(request: Request, session_id: int | None = None, game_code: str | None = None):
     try:
         form_data = await request.form()
     except MultipartParseError:
@@ -163,13 +163,35 @@ async def make_game(request: Request, session_id: int | None = None):
         session.add_all(groupers)
         session.flush()
     else:
-        # TODO and some type of validation so other people
-        #    can't mess with session of others
         # Current idea is to require one of the past game codes be sent with
         #    this request
         # Since I do not want to make people log in this seems like a relatively
         #    secure option because as now people may just hit this url with a any session_id
-        game_session = Session.get(session_id)
+        # If this is not the most recent game of the session then instead of making it would
+        #    make sense to just redirect to the newest game
+        assert game_code is not None
+        game = session.scalar(
+            select(Game)
+            .options(joinedload(Game.session))
+            .filter(Game.session_id == session_id)
+            .filter(Game.code == game_code)
+        )
+        if game is None:
+            return Message(Div("The game session no longer exists"), kind=MessageKind.ERROR)
+        most_recent_game_code = session.scalar(
+            select(Game.code)
+            .filter(Game.session_id == session_id)
+            .order_by(desc(Game.rowid))
+            .limit(1)
+        )
+        assert most_recent_game_code is not None
+
+        if most_recent_game_code != game.code:
+            return HttpHeader(
+                "HX-Redirect", app.url_path_for("play_game", game_code=most_recent_game_code)
+            )
+
+        game_session = game.session
 
     try:
         game = game_session.create_game()
@@ -251,7 +273,7 @@ def play_game(request: Request):
             cls="btn btn-success",
             hx_post=app.url_path_for("make_game"),
             hx_swap="none",
-            hx_vals={"session_id": game.session_id},
+            hx_vals={"session_id": game.session_id, "game_code": game.code},
         ),
         MessageStack(),
     )
@@ -291,11 +313,13 @@ def update_game(request: Request, is_spy_master: bool, last_game_card_id: int | 
     )
 
 
-@app.post(f"{PARTIALS_PREFIX}/guess_card")
-def guess(game_card_id: int, is_spy_master: bool):
+@app.post(f"{PARTIALS_PREFIX}/guess_card/{{game_code:str}}")
+def guess(request: Request, game_card_id: int, is_spy_master: bool):
     game_card = GameCard.get(game_card_id)
     game = game_card.game
     assert not game_card.is_guessed
+    game_code = request.path_params["game_code"]
+    assert game.code == game_code
     game_card.is_guessed = True
     game.last_game_card_id = game_card_id
     session.commit()
@@ -314,7 +338,7 @@ def guess(game_card_id: int, is_spy_master: bool):
         .filter(GameCard.is_guessed == True)
     )
     return (
-        CardBoard(game_card, is_spy_master),
+        CardBoard(game_card, game, is_spy_master),
         Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
         GamePolling(game),
     )
