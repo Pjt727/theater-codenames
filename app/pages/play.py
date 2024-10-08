@@ -9,15 +9,18 @@ from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
 
 
+# there might be a better way to do this
+def get_hx_value(query_selector: str, hx_val_key: str):
+    return f'JSON.parse(qs("{query_selector}").getAttribute("hx-vals"))["{hx_val_key}"]'
+
+
 def CardBoard(card: GameCard, game: Game, is_spy_master: bool = False):
+    dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master")
     active_attributes = {
         "hx_post": app.url_path_for("guess", game_code=game.code),
         "hx_swap": "outerHTML",
         "hx_trigger": "click",
-        # I think there might be a better way to do this
-        # if not then I would probably like utility js function to extract an hx_val from an
-        # html element
-        "hx_vals": f'js:{{"game_card_id": {card.rowid}, "is_spy_master": JSON.parse(qs("#spyMasterToggle").getAttribute("hx-vals"))["is_spy_master"]}}',
+        "hx_vals": f'js:{{"game_card_id": {card.rowid}, "is_spy_master": {dyn_spy_master}}}',
         "hx_include": "#spyMasterToggle",
         "style": "cursor: pointer",
     }
@@ -77,6 +80,21 @@ def SpyMasterButton(game_code: str, is_spy_master: bool):
         hx_swap_oob="true",
         hx_target="#gameBoard",
         hx_vals={"is_spy_master": is_spy_master},
+        hx_post=app.url_path_for("toggle_spymaster", game_code=game_code),
+    )
+
+
+def ConfirmButton(game_code: str):
+    dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master")
+    dyn_game_card = get_hx_value("#spyMasterToggle", "game_card_id")
+    return Button(
+        "Confirm Button",
+        cls="btn btn-primary",
+        id="spyMasterToggle",
+        hx_swap="outerHTML",
+        hx_swap_oob="true",
+        hx_target="#gameBoard",
+        hx_vals=f'js:{{"is_spy_master": {dyn_spy_master}, "game_card_id": {dyn_game_card}}}',
         hx_post=app.url_path_for("toggle_spymaster", game_code=game_code),
     )
 
@@ -275,6 +293,7 @@ def play_game(request: Request):
             hx_swap="none",
             hx_vals={"session_id": game.session_id, "game_code": game.code},
         ),
+        ConfirmButton(game.code),
         MessageStack(),
     )
 
@@ -353,3 +372,13 @@ def toggle_spymaster(request: Request, is_spy_master: bool):
     )
     assert game is not None
     return GameBoard(game, is_spy_master), SpyMasterButton(game.code, is_spy_master)
+
+
+@app.post(f"{PARTIALS_PREFIX}/select_card/{{game_code:str}}")
+def select_card(request: Request, is_spy_master: bool):
+    game_code = request.path_params["game_code"]
+    game = session.scalar(
+        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+    )
+    assert game is not None
+    return GameBoard(game, is_spy_master), ConfirmButton(game.code, is_spy_master)
