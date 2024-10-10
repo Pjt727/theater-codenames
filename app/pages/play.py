@@ -380,5 +380,6 @@ def select_card(request: Request, is_spy_master: bool):
     game = session.scalar(
         select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
     )
+    # "\u261d" *
     assert game is not None
     return GameBoard(game, is_spy_master), ConfirmButton(game.code, is_spy_master)

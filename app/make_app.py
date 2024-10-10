@@ -1,5 +1,7 @@
 from fasthtml.common import *
 from fasthtml.svg import Path
+from starlette.requests import Request
+import secrets
 
 _hdrs = (
     # boostrap cdn v5.3
@@ -23,10 +25,23 @@ _hdrs = (
                var onload = (callback) => document.addEventListener('DOMContentLoaded', callback)
                """),
 )
-
-app, rt = fast_app(hdrs=_hdrs, pico=False, live=True)
-
 PARTIALS_PREFIX = "/partials"
 ASSETS_PATH = "./assets"
 SCRIPTS_PATH = "./scripts"
 CSS_PATH = "./css"
+
+# session is currently only used to track who's guessing what
+#    could be fairly easily be abused / manipulated and make many different token
+SITE_TOKEN = "session_id"
+TOKEN_SIZE = 32
+
+
+def before(request: Request):
+    if SITE_TOKEN in request.session:
+        return
+    request.session[SITE_TOKEN] = secrets.token_urlsafe(TOKEN_SIZE)
+
+
+bware = Beforeware(before, skip=[r"/favicon\.ico", r"/assets/.*", r".*\.css", r".*\.js"])
+
+app, rt = fast_app(before=bware, hdrs=_hdrs, pico=False, live=True)

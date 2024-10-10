@@ -19,6 +19,7 @@ from fasthtml.ft import *
 from models.config import Base, session
 from models.errors import *
 from sqlalchemy import select
+from make_app import TOKEN_SIZE
 from sqlalchemy.orm import Mapped, validates
 from sqlalchemy.orm import mapped_column, relationship
 from enum import Enum as PyEnum
@@ -193,3 +194,19 @@ class GameCard(Base):
         if index >= CARDS_PER_GAME or index < 0:
             raise ValueError(f"Invalid index of {index} must be in range")
         return index
+
+
+class Selections(Base):
+    token: Mapped[str] = mapped_column(String(), primary_key=True)
+    game_code: Mapped[str] = mapped_column(
+        String(), ForeignKey("GamesCards.game_code"), primary_key=True
+    )
+    card_phrase: Mapped[str] = mapped_column(String(), ForeignKey("GameCards.card_phrase"))
+
+    # this ensures that people can't mess with the tokens too bad
+    #    like make them super big
+    @validates("token")
+    def validate_token(self, _, token):
+        if len(token) != TOKEN_SIZE:
+            raise ValueError("Invalid token size")
+        return token
