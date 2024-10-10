@@ -1,5 +1,5 @@
 from fasthtml.common import *
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, exists
 from models.game import *
 from models.errors import *
 from sqlalchemy.orm import joinedload
@@ -52,7 +52,7 @@ def CardBoard(card: GameCard, game: Game, is_spy_master: bool = False):
             if is_spy_master and card.is_guessed
             else None,
             Span(
-                "🙊" if card.kind == GameCardKind.BLACK else "🐵",
+                selection_pill_text,
                 cls=f"bg-light-subtle position-absolute top-0 start-0 translate-middle badge rounded-pill z-3",
             )
             if selection_pill_text and not card.is_guessed
@@ -72,9 +72,9 @@ def GamePolling(game: Game):
     )
 
 
-def GameBoard(game: Game, is_spy_master: bool = False, is_update: bool = False):
+def GameBoard(game: Game, is_spy_master: bool = False):
     game_cards = game.cards
-    return Table(cls="table", id="gameBoard", hx_swap_oob="true" if is_update else None)(
+    return Table(cls="table", id="gameBoard", hx_swap_oob="true")(
         Tbody(
             GamePolling(game),
             *[
@@ -106,7 +106,7 @@ def SpyMasterButton(game_code: str, is_spy_master: bool):
 def ConfirmButton(game_code: str, game_card_id: int | None = None):
     dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master")
     return Button(
-        "Confirm Button",
+        "Confirm Selection",
         cls="btn btn-primary",
         id="confirm-card",
         hx_swap="none",
@@ -345,7 +345,7 @@ def update_game(request: Request, is_spy_master: bool, last_updated: str):
     tan_guessed = len([c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed])
     tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
     return (
-        GameBoard(game, is_spy_master=is_spy_master, is_update=True),
+        GameBoard(game, is_spy_master=is_spy_master),
         Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
         Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
         Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
@@ -378,7 +378,7 @@ def guess(request: Request, game_card_id: int, is_spy_master: bool):
         .filter(GameCard.is_guessed == True)
     )
     return (
-        CardBoard(game_card, game, is_spy_master),
+        GameBoard(game, is_spy_master),
         Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
         GamePolling(game),
     )
@@ -400,23 +400,29 @@ def toggle_spymaster(request: Request, is_spy_master: bool):
 @app.post(f"{PARTIALS_PREFIX}/select_card/{{game_code:str}}")
 def select_card(request: Request, game_card_id: int, is_spy_master: bool):
     game_code = request.path_params["game_code"]
+    # i think there's a better sqlalchemy api for this query
+    game_exists = session.scalar(select(Game.code).filter(Game.code == Game.code)) is not None
+    assert game_exists
+    token = request.session.get(SITE_TOKEN)
+    if token is not None:
+        card = GameCard.get(game_card_id)
+        print(card.card_phrase)
+        assert card is not None
+        new_selection = {"token": token, "game_code": game_code, "card_phrase": card.card_phrase}
+        update_selection = (
+            sqlite_insert(Selection)
+            .values([new_selection])
+            .on_conflict_do_update(set_={Selection.card_phrase: card.card_phrase})
+        )
+        session.execute(update_selection)
+        session.commit()
+    # need to commit the selection queries before getting the joinedload
     game = session.scalar(
         select(Game)
         .filter(Game.code == game_code)
         .options(joinedload(Game.cards).joinedload(GameCard.selections))
     )
     assert game is not None
-    token = request.session.get(SITE_TOKEN)
-    if token is not None:
-        card = Card.get(game_card_id)
-        assert card is not None
-        new_selection = {"token": token, "game_code": game_code, "card_phrase": card.phrase}
-        update_selection = (
-            sqlite_insert(Selection)
-            .values([new_selection])
-            .on_conflict_do_update(set_={Selection.card_phrase: card.phrase})
-        )
-        session.execute(update_selection)
     game.last_updated = datetime.now()
     session.commit()
     return GameBoard(game, is_spy_master), ConfirmButton(game.code, game_card_id)
