@@ -1,16 +1,13 @@
 from datetime import datetime
 from sqlalchemy import (
-    CheckConstraint,
-    Column,
     ForeignKey,
     Integer,
     String,
     Boolean,
     Enum,
-    ForeignKeyConstraint,
-    not_,
     DateTime,
     UniqueConstraint,
+    ForeignKeyConstraint,
 )
 import random
 import string
@@ -136,7 +133,7 @@ class Game(Base):
     session_id: Mapped[int] = mapped_column(Integer(), ForeignKey("Sessions.id"))
     # integrity does not really matter as much for this because it should only be used
     #   to match game state
-    last_game_card_id: Mapped[Optional[int]] = mapped_column(Integer())
+    last_updated: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
 
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
     session: Mapped["Session"] = relationship(back_populates="games")
@@ -177,7 +174,7 @@ class GameCardKind(PyEnum):
 class GameCard(Base):
     __tablename__ = "GameCards"
 
-    is_guessed = mapped_column(Boolean(), primary_key=True)
+    is_guessed = mapped_column(Boolean())
     card_phrase: Mapped[str] = mapped_column(String(), ForeignKey("Cards.phrase"), primary_key=True)
     game_code: Mapped[str] = mapped_column(String(), ForeignKey("Games.code"), primary_key=True)
     kind: Mapped[GameCardKind] = mapped_column(Enum(GameCardKind))
@@ -185,8 +182,8 @@ class GameCard(Base):
     index: Mapped[int] = mapped_column(Integer())
 
     card: Mapped["Card"] = relationship(back_populates="game_cards")
-
     game: Mapped["Game"] = relationship(back_populates="cards")
+    selections: Mapped[list["Selection"]] = relationship(back_populates="game_card")
     __table_args__ = (UniqueConstraint("index", "game_code", name="uq_index_game_code"),)
 
     @validates("index")
@@ -196,17 +193,23 @@ class GameCard(Base):
         return index
 
 
-class Selections(Base):
+class Selection(Base):
+    __tablename__ = "Selections"
     token: Mapped[str] = mapped_column(String(), primary_key=True)
-    game_code: Mapped[str] = mapped_column(
-        String(), ForeignKey("GamesCards.game_code"), primary_key=True
+    game_code: Mapped[str] = mapped_column(String(), primary_key=True)
+    card_phrase: Mapped[Optional[str]] = mapped_column(String())
+    game_card: Mapped["GameCard"] = relationship(back_populates="selections")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["game_code", "card_phrase"], ["GameCards.game_code", "GameCards.card_phrase"]
+        ),
     )
-    card_phrase: Mapped[str] = mapped_column(String(), ForeignKey("GameCards.card_phrase"))
 
     # this ensures that people can't mess with the tokens too bad
     #    like make them super big
     @validates("token")
     def validate_token(self, _, token):
-        if len(token) != TOKEN_SIZE:
+        if len(token) > 64:
             raise ValueError("Invalid token size")
         return token

@@ -4,9 +4,11 @@ from models.game import *
 from models.errors import *
 from sqlalchemy.orm import joinedload
 from starlette.requests import Request
-from make_app import app, PARTIALS_PREFIX
+from make_app import app, PARTIALS_PREFIX, SITE_TOKEN
 from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
+from datetime import datetime
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 
 # there might be a better way to do this
@@ -14,16 +16,27 @@ def get_hx_value(query_selector: str, hx_val_key: str):
     return f'JSON.parse(qs("{query_selector}").getAttribute("hx-vals"))["{hx_val_key}"]'
 
 
+SELECTION_TEXT = "\u261d"
+SELECTION_COUNT = 3
+
+
 def CardBoard(card: GameCard, game: Game, is_spy_master: bool = False):
     dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master")
     active_attributes = {
-        "hx_post": app.url_path_for("guess", game_code=game.code),
-        "hx_swap": "outerHTML",
+        "id": f"game-card-{card.rowid}",
+        "hx_post": app.url_path_for("select_card", game_code=game.code),
+        "hx_swap": "none",
+        "hx_swap_oob": "true",
         "hx_trigger": "click",
         "hx_vals": f'js:{{"game_card_id": {card.rowid}, "is_spy_master": {dyn_spy_master}}}',
         "hx_include": "#spyMasterToggle",
         "style": "cursor: pointer",
     }
+
+    selection_count = len(card.selections)
+    selection_pill_text = SELECTION_TEXT * min(SELECTION_COUNT, selection_count)
+    if selection_count > SELECTION_COUNT:
+        selection_pill_text += "+"
 
     card_class = card.kind.to_bs_class() if card.is_guessed or is_spy_master else ""
     return Td(
@@ -38,6 +51,12 @@ def CardBoard(card: GameCard, game: Game, is_spy_master: bool = False):
             )
             if is_spy_master and card.is_guessed
             else None,
+            Span(
+                "🙊" if card.kind == GameCardKind.BLACK else "🐵",
+                cls=f"bg-light-subtle position-absolute top-0 start-0 translate-middle badge rounded-pill z-3",
+            )
+            if selection_pill_text and not card.is_guessed
+            else None,
         )
     )
 
@@ -48,7 +67,7 @@ def GamePolling(game: Game):
         hx_trigger="every 500ms",
         hx_swap_oob="true",
         hx_get=app.url_path_for("update_game", game_code=game.code),
-        hx_vals=f'js:{{"last_game_card_id": {game.last_game_card_id if game.last_game_card_id else -1}, "is_spy_master": JSON.parse(qs("#spyMasterToggle").getAttribute("hx-vals"))["is_spy_master"]}}',
+        hx_vals=f'js:{{"last_updated": "{game.last_updated.isoformat()}", "is_spy_master": JSON.parse(qs("#spyMasterToggle").getAttribute("hx-vals"))["is_spy_master"]}}',
         hidden=True,
     )
 
@@ -84,18 +103,16 @@ def SpyMasterButton(game_code: str, is_spy_master: bool):
     )
 
 
-def ConfirmButton(game_code: str):
+def ConfirmButton(game_code: str, game_card_id: int | None = None):
     dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master")
-    dyn_game_card = get_hx_value("#spyMasterToggle", "game_card_id")
     return Button(
         "Confirm Button",
         cls="btn btn-primary",
-        id="spyMasterToggle",
-        hx_swap="outerHTML",
+        id="confirm-card",
+        hx_swap="none",
         hx_swap_oob="true",
-        hx_target="#gameBoard",
-        hx_vals=f'js:{{"is_spy_master": {dyn_spy_master}, "game_card_id": {dyn_game_card}}}',
-        hx_post=app.url_path_for("toggle_spymaster", game_code=game_code),
+        hx_vals=f'js:{{"is_spy_master": {dyn_spy_master}, "game_card_id": {game_card_id}}}',
+        hx_post=app.url_path_for("guess", game_code=game_code),
     )
 
 
@@ -190,7 +207,7 @@ async def make_game(request: Request, session_id: int | None = None, game_code: 
         assert game_code is not None
         game = session.scalar(
             select(Game)
-            .options(joinedload(Game.session))
+            .options(joinedload(Game.session).joinedload(GameCard.selections))
             .filter(Game.session_id == session_id)
             .filter(Game.code == game_code)
         )
@@ -251,7 +268,9 @@ def find_game(game_code: str):
 def play_game(request: Request):
     game_code = request.path_params["game_code"]
     game = session.scalar(
-        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+        select(Game)
+        .filter(Game.code == game_code)
+        .options(joinedload(Game.cards).joinedload(GameCard.selections))
     )
     if game is None:
         return HttpHeader("HX-Redirect", app.url_path_for("play"))
@@ -301,18 +320,20 @@ def play_game(request: Request):
 # everything is an oob swap to make it easier to maybe do web connections later for
 #   updating the game state
 @app.get("/update/{game_code:str}")
-def update_game(request: Request, is_spy_master: bool, last_game_card_id: int | None = None):
+def update_game(request: Request, is_spy_master: bool, last_updated: str):
+    last_updated_date = datetime.fromisoformat(last_updated)
     game_code = request.path_params["game_code"]
+    # could maybe do a smaller query since a lot requests are expected to not change
     game = session.scalar(
-        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+        select(Game)
+        .filter(Game.code == game_code)
+        .options(joinedload(Game.cards).joinedload(GameCard.selections))
     )
     if game is None:
         return HttpHeader("HX-Redirect", app.url_path_for("play"))
 
-    # only update the game if the last game card guess is the same
-    # there is a slight problem with this in that game may still become inconsistant
-    #   but I think it is good enough
-    if game.last_game_card_id == last_game_card_id:
+    # only update if out of sync
+    if game.last_updated == last_updated_date:
         return
 
     red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
@@ -340,7 +361,7 @@ def guess(request: Request, game_card_id: int, is_spy_master: bool):
     game_code = request.path_params["game_code"]
     assert game.code == game_code
     game_card.is_guessed = True
-    game.last_game_card_id = game_card_id
+    game.last_updated = datetime.now()
     session.commit()
     same_card_count = session.scalar(
         select(func.count())
@@ -368,18 +389,34 @@ def toggle_spymaster(request: Request, is_spy_master: bool):
     is_spy_master = not is_spy_master
     game_code = request.path_params["game_code"]
     game = session.scalar(
-        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+        select(Game)
+        .filter(Game.code == game_code)
+        .options(joinedload(Game.cards).joinedload(GameCard.selections))
     )
     assert game is not None
     return GameBoard(game, is_spy_master), SpyMasterButton(game.code, is_spy_master)
 
 
 @app.post(f"{PARTIALS_PREFIX}/select_card/{{game_code:str}}")
-def select_card(request: Request, is_spy_master: bool):
+def select_card(request: Request, game_card_id: int, is_spy_master: bool):
     game_code = request.path_params["game_code"]
     game = session.scalar(
-        select(Game).filter(Game.code == game_code).options(joinedload(Game.cards))
+        select(Game)
+        .filter(Game.code == game_code)
+        .options(joinedload(Game.cards).joinedload(GameCard.selections))
     )
-    # "\u261d" *
     assert game is not None
-    return GameBoard(game, is_spy_master), ConfirmButton(game.code, is_spy_master)
+    token = request.session.get(SITE_TOKEN)
+    if token is not None:
+        card = Card.get(game_card_id)
+        assert card is not None
+        new_selection = {"token": token, "game_code": game_code, "card_phrase": card.phrase}
+        update_selection = (
+            sqlite_insert(Selection)
+            .values([new_selection])
+            .on_conflict_do_update(set_={Selection.card_phrase: card.phrase})
+        )
+        session.execute(update_selection)
+    game.last_updated = datetime.now()
+    session.commit()
+    return GameBoard(game, is_spy_master), ConfirmButton(game.code, game_card_id)
