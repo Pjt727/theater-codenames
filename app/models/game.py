@@ -197,6 +197,7 @@ class Selection(Base):
     __tablename__ = "Selections"
     token: Mapped[str] = mapped_column(String(), primary_key=True)
     game_code: Mapped[str] = mapped_column(String(), primary_key=True)
+    is_spy_master: Mapped[bool] = mapped_column(Boolean())
     card_phrase: Mapped[Optional[str]] = mapped_column(String())
     game_card: Mapped["GameCard"] = relationship(back_populates="selections")
 

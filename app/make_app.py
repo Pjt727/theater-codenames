@@ -44,4 +44,4 @@ def before(request: Request):
 
 bware = Beforeware(before, skip=[r"/favicon\.ico", r"/assets/.*", r".*\.css", r".*\.js"])
 
-app, rt = fast_app(before=bware, hdrs=_hdrs, pico=False, live=True)
+app, rt = fast_app(before=bware, hdrs=_hdrs, pico=False, live=False)

@@ -3,10 +3,16 @@ from make_app import ASSETS_PATH
 
 
 def Page(req: Request, title: str, *c):
+    if "hx-request" in req.headers.keys():
+        return (
+            Container(*c, id="rootEl"),
+            HttpHeader("HX-Push-Url", str(req.url)),
+            HttpHeader("HX-Retarget", "#rootEl"),
+        )
     return (
         Title(title),
         Hr(),
-        Body(Container(*c)),
+        Body(Container(*c, id="rootEl")),
     )
 
 
