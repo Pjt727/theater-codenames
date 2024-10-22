@@ -12,11 +12,6 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from enum import Enum
 
 
-# there might be a better way to do this
-def get_hx_value(query_selector: str, hx_val_key: str, default: str = "null"):
-    return f'(qs("{query_selector}")) ? JSON.parse(qs("{query_selector}").getAttribute("hx-vals"))["{hx_val_key}"] : {default}'
-
-
 SELECTION_TEXT = "\u261d"
 MAX_SELECTION_COUNT = 3
 
@@ -40,28 +35,36 @@ class GameRole(Enum):
         return f"game_role_{self.value}"
 
 
+# using a grid so that selections can be placed in the correct
+#   col / row when cells are being replaced
+board_css = f"""
+.board {{
+    display: grid;
+    grid-template-columns: repeat({CARDS_PER_ROW}, 1fr);
+    grid-template-rows: repeat({math.ceil(CARDS_PER_GAME / CARDS_PER_ROW)}, 1fr);
+    gap: 10px;
+}}
+"""
+
+
 def CardBoard(
-    request: Request,
     card: GameCard,
     game: Game,
     is_spy_master: bool = False,
     is_update: bool = True,
+    is_users_selection: bool = False,
 ):
-    dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master", "false")
     active_attributes = {
         "id": f"game-card-{card.rowid}",
         "hx_post": app.url_path_for("select_card", game_code=game.code),
         "hx_swap": "none",
         "hx_swap_oob": "true" if is_update else None,
         "hx_trigger": "click",
-        "hx_vals": f'js:{{"game_card_id": {card.rowid}, "is_spy_master": {dyn_spy_master}}}',
+        "hx_vals": {"game_card_id": card.rowid},
         "style": "cursor: pointer",
     }
 
-    visble_selections = [
-        s.token for s in card.selections if is_spy_master or (s.is_spy_master == is_spy_master)
-    ]
-    is_users_selection = request.session.get(SITE_TOKEN) in visble_selections
+    visble_selections = [s.token for s in card.selections]
     selection_count = len(visble_selections)
     if selection_count > MAX_SELECTION_COUNT:
         selection_pill_text = f"{SELECTION_TEXT} X {selection_count}"
@@ -69,8 +72,9 @@ def CardBoard(
         selection_pill_text = SELECTION_TEXT * selection_count
 
     card_class = card.kind.to_bs_class() if card.is_guessed or is_spy_master else ""
-    return Td(
-        cls=f"border text-center {card_class} p-3 {"text-decoration-underline" if is_users_selection and not card.is_guessed else ""}",
+    return Div(
+        # unselected-card matches the generated css for spy masters to have color
+        cls=f"border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
         **({} if card.is_guessed else active_attributes),
     )(
         Div(
@@ -93,59 +97,23 @@ def CardBoard(
     )
 
 
-def GamePolling(game: Game):
-    dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master", default="false")
-    return Div(
-        id="game_polling",
-        hx_trigger="every 500ms",
-        hx_swap_oob="true",
-        hx_get=app.url_path_for("update_game", game_code=game.code),
-        hx_vals=f'js:{{"last_updated": "{game.last_updated.isoformat()}", "is_spy_master": {dyn_spy_master}}}',
-        hidden=True,
-    )
-
-
-def GameBoard(request: Request, game: Game, is_spy_master: bool = False, is_update: bool = True):
-    game_cards = game.cards
-    return Table(cls="table", id="gameBoard", hx_swap_oob="true" if is_update else None)(
-        Tbody(
-            GamePolling(game),
-            *[
-                Tr(
-                    *[
-                        CardBoard(request, game_card, game, is_spy_master, is_update)
-                        for game_card in game_cards[i : i + CARDS_PER_ROW]
-                    ]
-                )
-                for i in range(0, CARDS_PER_GAME, CARDS_PER_ROW)
-            ],
-        ),
-    )
-
-
-def SpyMasterButton(game_code: str, is_spy_master: bool, is_update: bool = True):
-    return Button(
-        "Toggle Spy Master",
-        cls="btn btn-primary",
-        id="spyMasterToggle",
-        hx_swap="outerHTML",
-        hx_swap_oob="true" if is_update else None,
-        hx_target="#gameBoard",
-        hx_vals={"is_spy_master": is_spy_master},
-        hx_post=app.url_path_for("toggle_spymaster", game_code=game_code),
+def GameBoard(game: Game, is_update: bool = True):
+    return Div(cls="board", id="gameBoard", hx_swap_oob="true" if is_update else None)(
+        *[*[CardBoard(game_card, game, is_update) for game_card in game.cards]],
     )
 
 
 def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bool = True):
-    dyn_spy_master = get_hx_value("#spyMasterToggle", "is_spy_master", "false")
     return Button(
         "Confirm Selection",
         cls="btn btn-primary",
         id="confirm-card",
         hx_swap="none",
         hx_swap_oob="true" if is_update else None,
-        hx_vals=f"""js:{{"game_card_id": {game_card_id}, "is_spy_master": {dyn_spy_master}}}""",
+        hx_vals={"game_card_id": game_card_id},
         hx_post=app.url_path_for("guess", game_code=game_code),
+        hx_disable=None if game_card_id is None else "true",
+        disabled="" if game_card_id is None else None,
     )
 
 
@@ -161,6 +129,13 @@ def NextGameButton(game: Game, text: str, enabled: bool = True, is_update: bool 
         hx_disable=None if enabled else "true",
         disabled=None if enabled else "",
     )
+
+
+def UserSelectedStyle(game_card: GameCard | None, is_update: bool = True):
+    style = Style(id="userSelectedStyle", hx_swap_oob="true" if is_update else None)
+    if game_card is None:
+        return style
+    return style(f"#game-card-{game_card.rowid} {{ text-decoration: underline; }}")
 
 
 @app.get("/play")
@@ -354,7 +329,18 @@ def play_game(request: Request, role: str | None = None):
     return Page(
         request,
         "Play",
-        GameBoard(request, game, is_update=False),
+        # there might be a better way to apply these styles for the spymasters
+        Style(board_css),
+        Style(
+            "\n".join(
+                [
+                    f".unselected-card-{card.index} {{ {card.kind.to_styles()}; }}"
+                    for card in game.cards
+                ]
+            )
+        ),
+        UserSelectedStyle(None, is_update=False),
+        GameBoard(game, is_update=False),
         Div(
             Span(cls="pe-3")(
                 "Red:",
@@ -373,9 +359,6 @@ def play_game(request: Request, role: str | None = None):
                 Span(id=repr(GameCardKind.TAN))(f"{tan_guessed}/{tan}"),
             ),
         ),
-        SpyMasterButton(game.code, False, is_update=False)
-        if role == repr(GameRole.SPYMASTER)
-        else None,
         NextGameButton(game, "New Game", is_update=False)
         if (role == repr(GameRole.SPYMASTER)) or (role == repr(GameRole.OPERATIVE))
         else NextGameButton(game, "Continue", False, is_update=False),
@@ -384,6 +367,18 @@ def play_game(request: Request, role: str | None = None):
         else None,
         MessageStack(),
     )
+
+
+players = []
+
+
+def connect_player(send):
+    pass
+
+
+@app.ws("/play-connect")
+def play_connect(msg: str, send):
+    pass
 
 
 # everything is an oob swap to make it easier to maybe do web connections later for
@@ -421,7 +416,7 @@ def update_game(request: Request, is_spy_master: bool, last_updated: str):
         .limit(1)
     )
     return (
-        GameBoard(request, game, is_spy_master=is_spy_master),
+        GameBoard(game),
         Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
         Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
         Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
@@ -440,106 +435,42 @@ def guess(request: Request, game_card_id: int, is_spy_master: bool):
     game_card.is_guessed = True
     game.last_updated = datetime.now()
     session.commit()
-    same_card_count = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == game_card.kind)
-        # idk why game equilanve on the objects did not work
-        .filter(GameCard.game_code == game_card.game_code)
-    )
-    guess_card_count = session.scalar(
-        select(func.count())
-        .select_from(GameCard)
-        .filter(GameCard.kind == game_card.kind)
-        .filter(GameCard.game_code == game_card.game_code)
-        .filter(GameCard.is_guessed == True)
-    )
-
-    # I wanted to send this throught the request but there was some weird js htmx hx-vals
-    #    parsing problem...  because of the dynamic hx-vals
-    # is_spy_master = session.scalar(
-    #     select(Selection.is_spy_master)
-    #     .filter(Selection.token == request.session.get(SITE_TOKEN))
-    #     .filter(Selection.game_card == game_card)
-    # )
-    # if is_spy_master is None:
-    #     is_spy_master = False
-    return (
-        GameBoard(request, game, is_spy_master),
-        Span(id=repr(game_card.kind), hx_swap_oob="true")(f"{guess_card_count}/{same_card_count}"),
-        GamePolling(game),
-    )
-
-
-@app.post(f"{PARTIALS_PREFIX}/toggle_spymaster/{{game_code:str}}")
-def toggle_spymaster(request: Request, is_spy_master: bool):
-    is_spy_master = not is_spy_master
-    game_code = request.path_params["game_code"]
-    game = session.scalar(
-        select(Game)
-        .filter(Game.code == game_code)
-        .options(joinedload(Game.cards).joinedload(GameCard.selections))
-    )
-    assert game is not None
-    return GameBoard(request, game, is_spy_master), SpyMasterButton(game.code, is_spy_master)
+    return None
 
 
 @app.post(f"{PARTIALS_PREFIX}/select_card/{{game_code:str}}")
-def select_card(request: Request, game_card_id: int, is_spy_master: bool):
+def select_card(request: Request, game_card_id: int):
     game_code = request.path_params["game_code"]
     # i think there's a better sqlalchemy api for this query
     game_exists = session.scalar(select(Game.code).filter(Game.code == Game.code)) is not None
     assert game_exists
     token = request.session.get(SITE_TOKEN)
-    if token is not None:
-        card = GameCard.get(game_card_id)
-        assert card is not None
-        current_selection = session.scalar(
-            select(Selection).filter(Selection.token == token and Selection.game_code == game_code)
-        )
-        if current_selection is not None and current_selection.card_phrase == card.card_phrase:
-            # they reselected the same card so unselect it
-            session.delete(current_selection)
-            session.commit()
-        else:
-            new_selection = {
-                "token": token,
-                "game_code": game_code,
-                "card_phrase": card.card_phrase,
-                "is_spy_master": is_spy_master,
+    assert token is not None
+    card = GameCard.get(game_card_id)
+    assert card is not None
+    current_selection = session.scalar(
+        select(Selection).filter(Selection.token == token and Selection.game_code == game_code)
+    )
+    if current_selection is not None and current_selection.card_phrase == card.card_phrase:
+        # they reselected the same card so unselect it
+        session.delete(current_selection)
+        session.commit()
+        return UserSelectedStyle(None), ConfirmButton(game_code, None)
+    new_selection = {
+        "token": token,
+        "game_code": game_code,
+        "card_phrase": card.card_phrase,
+    }
+    update_selection = (
+        sqlite_insert(Selection)
+        .values([new_selection])
+        .on_conflict_do_update(
+            set_={
+                Selection.card_phrase: card.card_phrase,
+                Selection.game_code: game_code,
             }
-            print(new_selection)
-            update_selection = (
-                sqlite_insert(Selection)
-                .values([new_selection])
-                .on_conflict_do_update(
-                    set_={
-                        Selection.card_phrase: card.card_phrase,
-                        Selection.is_spy_master: is_spy_master,
-                        Selection.game_code: game_code,
-                    }
-                )
-            )
-            session.execute(update_selection)
-            session.commit()
-    # need to commit the selection queries before getting the joinedload
-    game = session.scalar(
-        select(Game)
-        .filter(Game.code == game_code)
-        .options(joinedload(Game.cards).joinedload(GameCard.selections))
+        )
     )
-    assert game is not None
-    game.last_updated = datetime.now()
+    session.execute(update_selection)
     session.commit()
-    more_recent_game = session.scalar(
-        select(Game)
-        .filter(Game.code != game.code)
-        .filter(Game.session_id == game.session_id)
-        .order_by(desc(Game.rowid))
-        .limit(1)
-    )
-    return (
-        GameBoard(request, game, is_spy_master),
-        ConfirmButton(game.code, game_card_id),
-        None if more_recent_game is None else NextGameButton(more_recent_game, "Next Game", True),
-    )
+    return UserSelectedStyle(card), ConfirmButton(game_code, game_card_id)

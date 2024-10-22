@@ -166,6 +166,17 @@ class GameCardKind(PyEnum):
             return "bg-warning-subtle"
         raise ValueError("Unexpected enum")
 
+    def to_styles(self) -> str:
+        if self == GameCardKind.RED:
+            return "background-color: #f8d7da; color: #721c24;"
+        elif self == GameCardKind.BLUE:
+            return "background-color: #cce5ff; color: #004085;"
+        elif self == GameCardKind.BLACK:
+            return "background-color: #343a40; color: #fff;"
+        elif self == GameCardKind.TAN:
+            return "background-color: #fff3cd; color: #856404;"
+        raise ValueError("Unexpected enum")
+
     def __repr__(self) -> str:
         # id's don't work well with .'s
         return f"game_card_kind_{self.name}"
@@ -197,7 +208,6 @@ class Selection(Base):
     __tablename__ = "Selections"
     token: Mapped[str] = mapped_column(String(), primary_key=True)
     game_code: Mapped[str] = mapped_column(String(), primary_key=True)
-    is_spy_master: Mapped[bool] = mapped_column(Boolean())
     card_phrase: Mapped[Optional[str]] = mapped_column(String())
     game_card: Mapped["GameCard"] = relationship(back_populates="selections")
 
