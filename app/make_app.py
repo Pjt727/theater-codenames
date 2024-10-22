@@ -16,6 +16,7 @@ _hdrs = (
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz",
         crossorigin="anonymous",
     ),
+    Script(src="https://unpkg.com/htmx.org@1.9.12/dist/ext/ws.js"),
     # some javascript abbreviations
     #  (i like this better than using some of the other mini js frameworks)
     Script("""

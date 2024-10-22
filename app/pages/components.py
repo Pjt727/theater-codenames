@@ -8,6 +8,7 @@ def Page(req: Request, title: str, *c):
             Container(*c, id="rootEl"),
             HttpHeader("HX-Push-Url", str(req.url)),
             HttpHeader("HX-Retarget", "#rootEl"),
+            HttpHeader("HX-Reswap", "outerHTML"),
         )
     return (
         Title(title),
