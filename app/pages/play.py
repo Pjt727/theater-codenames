@@ -14,6 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from enum import Enum
 from starlette.applications import Starlette
 from typing import Callable
+import uuid
 
 
 SELECTION_TEXT = "\u261d"
@@ -64,35 +65,23 @@ def CardBoard(
         "hx_swap_oob": "true" if is_update else None,
         "hx_trigger": "click",
         "hx_vals": {"game_card_id": card.rowid},
-        "style": "cursor: pointer",
     }
 
-    visble_selections = [s.token for s in card.selections]
-    selection_count = len(visble_selections)
-    if selection_count > MAX_SELECTION_COUNT:
-        selection_pill_text = f"{SELECTION_TEXT} X {selection_count}"
-    else:
-        selection_pill_text = SELECTION_TEXT * selection_count
-
+    row, col = divmod(card.index, CARDS_PER_ROW)
     card_class = card.kind.to_bs_class() if card.is_guessed else ""
     return Div(
         # unselected-card matches the generated css for spy masters to have color
-        cls=f"border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
+        cls=f"z-1 border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
+        style=f"grid-area: {row} / {col} / {row} / {col}; {"" if card.is_guessed else "cursor: pointer"}",
         **({} if card.is_guessed else active_attributes),
     )(
-        Div(cls=f"position-relative {"text-decoration-line-through" if card.is_guessed else ""}")(
+        Div(cls=f"{"text-decoration-line-through" if card.is_guessed else ""}")(
             card.card_phrase.title(),
             Span(
                 "🙊" if card.kind == GameCardKind.BLACK else "🐵",
-                cls=f"text-bg-light position-absolute top-0 start-100 translate-middle badge rounded-pill z-3",
+                cls=f"z-3 text-bg-light position-absolute top-0 start-100 translate-middle badge rounded-pill z-3",
             )
             if card.is_guessed
-            else None,
-            Span(
-                selection_pill_text,
-                cls=f"text-bg-light border position-absolute top-0 start-0 translate-middle badge rounded-pill z-3",
-            )
-            if selection_pill_text and not card.is_guessed
             else None,
         )
     )
@@ -101,6 +90,7 @@ def CardBoard(
 def GameBoard(game: Game, is_update: bool = True):
     return Div(cls="board", id="gameBoard", hx_swap_oob="true" if is_update else None)(
         *[CardBoard(game_card, game, is_update) for game_card in game.cards],
+        None if is_update else Selections(game),
     )
 
 
@@ -137,6 +127,35 @@ def UserSelectedStyle(game_card: GameCard | None, is_update: bool = True):
     if game_card is None:
         return style
     return style(f"#game-card-{game_card.rowid} {{ text-decoration: underline; }}")
+
+
+def Selections(game: Game, is_update: bool = True):
+    selection_containers = []
+    for card in game.cards:
+        if card.is_guessed:
+            continue
+        selection_count = len(card.selections)
+        if selection_count == 0:
+            continue
+        if selection_count > MAX_SELECTION_COUNT:
+            selection_pill_text = f"{SELECTION_TEXT} X {selection_count}"
+        else:
+            selection_pill_text = SELECTION_TEXT * selection_count
+        row, col = divmod(card.index, CARDS_PER_ROW)
+        selection_containers.append(
+            Div(
+                cls="z-0 position-relative",
+                style=f"grid-area: {row} / {col} / {row} / {col}",
+            )(
+                Span(
+                    selection_pill_text,
+                    cls=f"z-3 text-bg-light border position-absolute top-0 start-0 translate-middle badge rounded-pill z-3",
+                )
+            )
+        )
+    return Div(
+        id="selections", style="display: contents", hx_swap_oob="true" if is_update else None
+    )(*selection_containers)
 
 
 @app.get("/play")
@@ -338,7 +357,7 @@ def play_game(request: Request, role: str | None = None):
                 ]
             )
         )
-        if role == GameRole.SPYMASTER
+        if role == repr(GameRole.SPYMASTER)
         else None,
         UserSelectedStyle(None, is_update=False),
         Div(hx_ext="ws", ws_connect=app.url_path_for("play_connect", game_code=game_code)),
@@ -386,6 +405,8 @@ async def updated_game(game_code: str, last_updated: str | None):
 
     # only update if out of sync
     if game.last_updated == last_updated_date:
+        print("last updated", game.last_updated, last_updated_date)
+        print(game.rowid, game.code)
         return
 
     red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
@@ -404,59 +425,58 @@ async def updated_game(game_code: str, last_updated: str | None):
         .limit(1)
     )
     return (
-        GameBoard(game),
+        *[CardBoard(c, game) for c in game.cards if c.is_guessed],
         Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
         Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
         Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
         Span(id=repr(GameCardKind.TAN), hx_swap_oob="true")(f"{tan_guessed}/{tan}"),
         None if more_recent_game is None else NextGameButton(more_recent_game, "Next Game", True),
+        Selections(game),
     )
 
 
 @dataclass
 class WebSocketPlayerData:
-    send: Callable
+    websocket: WebSocket
     game_code: str
     last_updated: str | None = None  # isoformatted
 
 
-players: list[WebSocketPlayerData] = []
+players: dict[str, WebSocketPlayerData] = {}
 
 
-# currently broken
 async def update_game():
-    for i, player in enumerate(players):
-        print(i)
+    for uuid, player in players.items():
         try:
             game = session.scalar(select(Game).where(Game.code == player.game_code))
             if game is None:
-                players.pop(i)
+                del players[uuid]
                 continue
             fhtml_game = await updated_game(player.game_code, player.last_updated)
             if fhtml_game is None:
+                # case where game shouldn't be updated
                 continue
-            await player.send(to_xml(fhtml_game))
+            await player.websocket.send_text(to_xml(fhtml_game))
             player.last_updated = str(game.last_updated)
         except Exception as err:
             print(err)
-            players.pop(i)
+            del players[uuid]
 
 
-async def play_connect(websocket: WebSocket):
-    await websocket.accept()
-    game_code = websocket.path_params["game_code"]
-    print(game_code)
-    players.append(WebSocketPlayerData(send=websocket.send_text, game_code=game_code))
-    while True:
-        try:
-            fhtml_game = await updated_game(game_code, None)  # update no matter the last update
-            await websocket.send_text(to_xml(fhtml_game))  # pyright: ignore
-            await asyncio.sleep(1.5)
-        except WebSocketDisconnect:
-            break
+class PlayConnect(WebSocketEndpoint):
+    encoding = "http"
+
+    async def on_connect(self, websocket: WebSocket):
+        await websocket.accept()
+        game_code = websocket.path_params["game_code"]
+        self.uuid = str(uuid.uuid4())
+        players[self.uuid] = WebSocketPlayerData(websocket=websocket, game_code=game_code)
+
+    async def on_disconnect(self, websocket: WebSocket, close_code: int):
+        del players[self.uuid]
 
 
-app.add_websocket_route("/play-connect/{game_code:str}", play_connect, name="play_connect")
+app.add_websocket_route("/play-connect/{game_code:str}", PlayConnect, name="play_connect")
 
 
 @app.post(f"{PARTIALS_PREFIX}/guess_card/{{game_code:str}}")
@@ -476,12 +496,15 @@ async def guess(request: Request, game_card_id: int):
 async def select_card(request: Request, game_card_id: int):
     game_code = request.path_params["game_code"]
     # i think there's a better sqlalchemy api for this query
-    game_exists = session.scalar(select(Game.code).filter(Game.code == Game.code)) is not None
+    game = session.scalar(select(Game).filter(Game.code == game_code))
+    game_exists = game is not None
     assert game_exists
     token = request.session.get(SITE_TOKEN)
     assert token is not None
     card = GameCard.get(game_card_id)
     assert card is not None
+    game.last_updated = datetime.now()
+    session.commit()
     current_selection = session.scalar(
         select(Selection).filter(Selection.token == token and Selection.game_code == game_code)
     )
@@ -489,6 +512,7 @@ async def select_card(request: Request, game_card_id: int):
         # they reselected the same card so unselect it
         session.delete(current_selection)
         session.commit()
+        await update_game()
         return UserSelectedStyle(None), ConfirmButton(game_code, None)
     new_selection = {
         "token": token,
@@ -509,3 +533,11 @@ async def select_card(request: Request, game_card_id: int):
     session.commit()
     await update_game()
     return UserSelectedStyle(card), ConfirmButton(game_code, game_card_id)
+
+
+async def connect_player(ws: WebSocket, send):
+    game_code = ws.path_params["game_code"]
+
+
+async def disconnect_player(send):
+    pass
