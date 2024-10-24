@@ -59,19 +59,19 @@ def CardBoard(
     is_users_selection: bool = False,
 ):
     active_attributes = {
-        "id": f"game-card-{card.rowid}",
         "hx_post": app.url_path_for("select_card", game_code=game.code),
         "hx_swap": "none",
-        "hx_swap_oob": "true" if is_update else None,
         "hx_trigger": "click",
         "hx_vals": {"game_card_id": card.rowid},
     }
 
-    row, col = divmod(card.index, CARDS_PER_ROW)
+    row, col = card.to_row_col()
     card_class = card.kind.to_bs_class() if card.is_guessed else ""
     return Div(
         # unselected-card matches the generated css for spy masters to have color
-        cls=f"z-1 border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
+        id=f"game-card-{card.rowid}",
+        hx_swap_oob="true" if is_update else None,
+        cls=f"rounded-3 position-relative border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
         style=f"grid-area: {row} / {col} / {row} / {col}; {"" if card.is_guessed else "cursor: pointer"}",
         **({} if card.is_guessed else active_attributes),
     )(
@@ -79,7 +79,8 @@ def CardBoard(
             card.card_phrase.title(),
             Span(
                 "🙊" if card.kind == GameCardKind.BLACK else "🐵",
-                cls=f"z-3 text-bg-light position-absolute top-0 start-100 translate-middle badge rounded-pill z-3",
+                cls=f"text-bg-light position-absolute translate-middle badge rounded-pill",
+                style="top: 10%; left: 90%;",
             )
             if card.is_guessed
             else None,
@@ -90,11 +91,12 @@ def CardBoard(
 def GameBoard(game: Game, is_update: bool = True):
     return Div(cls="board", id="gameBoard", hx_swap_oob="true" if is_update else None)(
         *[CardBoard(game_card, game, is_update) for game_card in game.cards],
-        None if is_update else Selections(game),
+        None if is_update else Selections(game, is_update),
     )
 
 
 def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bool = True):
+    print(game_card_id, game_card_id is None)
     return Button(
         "Confirm Selection",
         cls="btn btn-primary",
@@ -103,7 +105,7 @@ def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bo
         hx_swap_oob="true" if is_update else None,
         hx_vals={"game_card_id": game_card_id},
         hx_post=app.url_path_for("guess", game_code=game_code),
-        hx_disable=None if game_card_id is None else "true",
+        hx_disable="true" if game_card_id is None else None,
         disabled="" if game_card_id is None else None,
     )
 
@@ -141,15 +143,16 @@ def Selections(game: Game, is_update: bool = True):
             selection_pill_text = f"{SELECTION_TEXT} X {selection_count}"
         else:
             selection_pill_text = SELECTION_TEXT * selection_count
-        row, col = divmod(card.index, CARDS_PER_ROW)
+        row, col = card.to_row_col()
         selection_containers.append(
             Div(
-                cls="z-0 position-relative",
-                style=f"grid-area: {row} / {col} / {row} / {col}",
+                cls="position-relative",
+                style=f"grid-area: {row} / {col} / {row} / {col}; pointer-events: none;",
             )(
                 Span(
                     selection_pill_text,
-                    cls=f"z-3 text-bg-light border position-absolute top-0 start-0 translate-middle badge rounded-pill z-3",
+                    cls=f"text-bg-light border position-absolute translate-middle badge rounded-pill z-3",
+                    style="top: 10%; left: 10%;",
                 )
             )
         )
@@ -361,6 +364,7 @@ def play_game(request: Request, role: str | None = None):
         else None,
         UserSelectedStyle(None, is_update=False),
         Div(hx_ext="ws", ws_connect=app.url_path_for("play_connect", game_code=game_code)),
+        H2(f"Game Code: {game_code}"),
         GameBoard(game, is_update=False),
         Div(
             Span(cls="pe-3")(
@@ -405,8 +409,6 @@ async def updated_game(game_code: str, last_updated: str | None):
 
     # only update if out of sync
     if game.last_updated == last_updated_date:
-        print("last updated", game.last_updated, last_updated_date)
-        print(game.rowid, game.code)
         return
 
     red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
@@ -490,6 +492,7 @@ async def guess(request: Request, game_card_id: int):
     game.last_updated = datetime.now()
     session.commit()
     await update_game()
+    return UserSelectedStyle(None), ConfirmButton(game_code, None)
 
 
 @app.post(f"{PARTIALS_PREFIX}/select_card/{{game_code:str}}")
@@ -533,11 +536,3 @@ async def select_card(request: Request, game_card_id: int):
     session.commit()
     await update_game()
     return UserSelectedStyle(card), ConfirmButton(game_code, game_card_id)
-
-
-async def connect_player(ws: WebSocket, send):
-    game_code = ws.path_params["game_code"]
-
-
-async def disconnect_player(send):
-    pass

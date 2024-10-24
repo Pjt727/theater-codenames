@@ -24,7 +24,7 @@ from typing import Optional
 
 CARDS_PER_GAME = 25
 GUESS_AMOUNT = 8
-BLACK_AMOUNT = 1
+BLACK_AMOUNT = 3
 # the game logic that must follow if you mess with the default card amounts
 assert CARDS_PER_GAME > (GUESS_AMOUNT * 2 + 1) + BLACK_AMOUNT
 CARDS_PER_ROW = 5
@@ -157,24 +157,24 @@ class GameCardKind(PyEnum):
 
     def to_bs_class(self) -> str:
         if self == GameCardKind.RED:
-            return "bg-danger-subtle"
+            return "bg-danger"
         elif self == GameCardKind.BLUE:
-            return "bg-primary-subtle"
+            return "bg-primary"
         elif self == GameCardKind.BLACK:
             return "text-light bg-black"
         elif self == GameCardKind.TAN:
-            return "bg-warning-subtle"
+            return "bg-warning"
         raise ValueError("Unexpected enum")
 
     def to_styles(self) -> str:
         if self == GameCardKind.RED:
-            return "background-color: #f8d7da; color: #721c24;"
+            return "background-color: #dc3546;"
         elif self == GameCardKind.BLUE:
-            return "background-color: #cce5ff; color: #004085;"
+            return "background-color: #0d6efd;"
         elif self == GameCardKind.BLACK:
             return "background-color: #343a40; color: #fff;"
         elif self == GameCardKind.TAN:
-            return "background-color: #fff3cd; color: #856404;"
+            return "background-color: #fec007;"
         raise ValueError("Unexpected enum")
 
     def __repr__(self) -> str:
@@ -202,6 +202,11 @@ class GameCard(Base):
         if index >= CARDS_PER_GAME or index < 0:
             raise ValueError(f"Invalid index of {index} must be in range")
         return index
+
+    # this is wrong but it is consistantly wrong so idrc
+    def to_row_col(self) -> tuple[int, int]:
+        row, col = divmod(self.index, CARDS_PER_ROW)
+        return (row if row != 0 else CARDS_PER_ROW, col if col != 0 else CARDS_PER_ROW)
 
 
 class Selection(Base):
