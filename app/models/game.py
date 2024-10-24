@@ -24,7 +24,7 @@ from typing import Optional
 
 CARDS_PER_GAME = 25
 GUESS_AMOUNT = 8
-BLACK_AMOUNT = 3
+BLACK_AMOUNT = 1
 # the game logic that must follow if you mess with the default card amounts
 assert CARDS_PER_GAME > (GUESS_AMOUNT * 2 + 1) + BLACK_AMOUNT
 CARDS_PER_ROW = 5
