@@ -14,6 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from enum import Enum
 from starlette.applications import Starlette
 from typing import Callable
+from dataclasses import dataclass, field
 import uuid
 
 
@@ -96,7 +97,6 @@ def GameBoard(game: Game, is_update: bool = True):
 
 
 def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bool = True):
-    print(game_card_id, game_card_id is None)
     return Button(
         "Confirm Selection",
         cls="btn btn-primary",
@@ -110,12 +110,27 @@ def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bo
     )
 
 
-def NextGameButton(game: Game, text: str, enabled: bool = True, is_update: bool = True):
+def NextGameButton(game: Game, enabled: bool = True, is_update: bool = True):
+    more_recent_game = session.scalar(
+        select(Game)
+        .filter(Game.code != game.code)
+        .filter(Game.session_id == game.session_id)
+        .filter(Game.rowid > game.rowid)
+        .limit(1)
+    )
+    # no need to return anything if there is not a new game
+    if not more_recent_game and is_update:
+        return None
+    if more_recent_game:
+        print(more_recent_game.code)
     return Button(
-        text,
+        "Next Game" if more_recent_game else "Make Game",
         id="next_game",
         cls="btn btn-success",
-        hx_post=app.url_path_for("make_game"),
+        hx_post=app.url_path_for("continue_game") if not more_recent_game else None,
+        hx_get=app.url_path_for("play_game", game_code=more_recent_game.code)
+        if more_recent_game
+        else None,
         hx_swap="none",
         hx_swap_oob="true" if is_update else None,
         hx_vals={"session_id": game.session_id, "game_code": game.code},
@@ -167,7 +182,12 @@ def play(request: Request):
     return Page(
         request,
         "Play",
-        Form(cls="pt-5", hx_post=app.url_path_for("play"), hx_swap="none")(
+        Form(
+            cls="pt-5",
+            hx_post=app.url_path_for("make_game"),
+            hx_swap="none",
+            hx_vals='js:{"tags": Array.from(qsa(".card-tag:checked")).map(check => check.value)}',
+        )(
             # surely there is a better way... for some reason I get parse errors
             #   on empty messages
             # seems to be an open issue: https://github.com/Kludex/python-multipart/issues/38
@@ -181,7 +201,10 @@ def play(request: Request):
                 *[
                     (
                         Input(
-                            name=f"tag-{tag.rowid}", cls="form-check-input me-2", type="checkbox"
+                            name=f"tag-{tag.rowid}",
+                            value=tag.rowid,
+                            cls="card-tag form-check-input me-2",
+                            type="checkbox",
                         ),
                         Label(tag.name, cls="me-3"),
                     )
@@ -209,96 +232,86 @@ def play(request: Request):
     )
 
 
+@dataclass
+class MakeGameData:
+    tags: list[str] = field(default_factory=list)
+
+
 @app.post("/play")
-async def make_game(request: Request, session_id: int | None = None, game_code: str | None = None):
-    try:
-        form_data = await request.form()
-    except MultipartParseError:
-        # since it is parsed early this error on an empty form would also happen early
-        # I am not sure if there is a better way to check if form() will work
+def make_game(game_data: MakeGameData):
+    if len(game_data.tags) == 0:
         return Message(Div(f"Please select some categories for the game"), kind=MessageKind.ERROR)
 
-    # Extract the tags... I wonder if there is a better way to send this information using
-    #   forms... Maybe it would just be better to us more client side js?
-    # A bit a js maybe in the hx-vals of the form could check which are enabled bc
-    #   doing it this way seems a bit hacky
-    tag_prefix = "tag-"
-    tag_ids: list[int] = []
-    for key in form_data.keys():
-        if not key.startswith(tag_prefix):
-            continue
-        try:
-            tag_ids.append(int(key[len(tag_prefix) :]))
-        except ValueError:
-            # should never happen unless someone messes with requests
-            return Message(Div("Malformed tag item"), kind=MessageKind.ERROR)
-
-    if session_id is None:
-        game_session = Session()
-        session.add(game_session)
-        # need to generate that id
-        session.flush()
-        groupers = [
-            SessionTagGrouper(session_id=game_session.id, tag_id=tag_id) for tag_id in tag_ids
-        ]
-        session.add_all(groupers)
-        session.flush()
-    else:
-        # Current idea is to require one of the past game codes be sent with
-        #    this request
-        # Since I do not want to make people log in this seems like a relatively
-        #    secure option because as now people may just hit this url with a any session_id
-        # If this is not the most recent game of the session then instead of making it would
-        #    make sense to just redirect to the newest game
-        assert game_code is not None
-        game = session.scalar(
-            select(Game)
-            .options(joinedload(Game.session))
-            .filter(Game.session_id == session_id)
-            .filter(Game.code == game_code)
-        )
-        if game is None:
-            return Message(Div("The game session no longer exists"), kind=MessageKind.ERROR)
-        # update this to make sure to push the updated new game button
-        game.last_updated = datetime.now()
-        most_recent_game_code = session.scalar(
-            select(Game.code)
-            .filter(Game.session_id == session_id)
-            .order_by(desc(Game.rowid))
-            .limit(1)
-        )
-        assert most_recent_game_code is not None
-
-        if most_recent_game_code != game.code:
-            return HttpHeader(
-                "HX-Redirect", app.url_path_for("play_game", game_code=most_recent_game_code)
-            )
-
-        game_session = game.session
+    # case to make a new session
+    game_session = Session()
+    session.add(game_session)
+    # need to generate that id
+    session.flush()
+    groupers = [
+        SessionTagGrouper(session_id=game_session.id, tag_id=tag_id) for tag_id in game_data.tags
+    ]
+    session.add_all(groupers)
+    session.flush()
 
     try:
         game = game_session.create_game()
     except NotEnoughCards as err:
         session.rollback()
-        if session_id is None:
-            # this was the first session that was being made which means
-            #   the tags cards was not enough to fill a single game
-            return Message(
-                Div(
-                    f"You need {err.needed_cards} cards to play a game but those tags only add up to {err.cards_left} cards."
-                ),
-                kind=MessageKind.ERROR,
-            )
-        # the other case that they finsihed the session by playing
-        #   pretty much all the cards
+        # this was the first session that was being made which means
+        #   the tags cards was not enough to fill a single game
+        return Message(
+            Div(
+                f"You need {err.needed_cards} cards to play a game but those tags only add up to {err.cards_left} cards."
+            ),
+            kind=MessageKind.ERROR,
+        )
+    session.commit()
+    return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
+
+
+# this is the same route for make_game and continue only difference
+#    is the wording of the button for the user
+@app.post("/continue_game")
+async def continue_game(game_code: str, session_id: int):
+    # Current idea is to require one of the past game codes be sent with
+    #    this request
+    # Since I do not want to make people log in this seems like a relatively
+    #    secure option because as now people may just hit this url with a any session_id
+    # If this is not the most recent game of the session then instead of making it would
+    #    make sense to just redirect to the newest game
+    game = session.scalar(
+        select(Game)
+        .options(joinedload(Game.session))
+        .filter(Game.session_id == session_id)
+        .filter(Game.code == game_code)
+    )
+    if game is None:
+        return Message(Div("The game session no longer exists"), kind=MessageKind.ERROR)
+    most_recent_game_code = session.scalar(
+        select(Game.code).filter(Game.session_id == session_id).order_by(desc(Game.rowid)).limit(1)
+    )
+    assert most_recent_game_code is not None
+
+    if most_recent_game_code != game.code:
+        return HttpHeader(
+            "HX-Redirect", app.url_path_for("play_game", game_code=most_recent_game_code)
+        )
+    # update this to make sure to push the updated new game button
+    game.last_updated = datetime.now()
+    game_session = game.session
+
+    try:
+        game = game_session.create_game()
+    except NotEnoughCards as err:
+        session.rollback()
         return Message(
             Div(
                 f"There's only {err.cards_left} cards left to play within this session and you need {err.needed_cards} to play a game!"
             ),
             kind=MessageKind.ERROR,
         )
-
     session.commit()
+    await update_game()
     return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
 
 
@@ -384,9 +397,9 @@ def play_game(request: Request, role: str | None = None):
                 Span(id=repr(GameCardKind.TAN))(f"{tan_guessed}/{tan}"),
             ),
         ),
-        NextGameButton(game, "New Game", is_update=False)
+        NextGameButton(game, is_update=False)
         if (role == repr(GameRole.SPYMASTER)) or (role == repr(GameRole.OPERATIVE))
-        else NextGameButton(game, "Continue", False, is_update=False),
+        else NextGameButton(game, enabled=False, is_update=False),
         ConfirmButton(game.code, is_update=False)
         if (role == repr(GameRole.SPYMASTER)) or (role == repr(GameRole.OPERATIVE))
         else None,
@@ -396,6 +409,7 @@ def play_game(request: Request, role: str | None = None):
 
 # everything is an oob swap to make it easier to maybe do web connections later for
 #   updating the game state
+# could implement caching on each game
 async def updated_game(game_code: str, last_updated: str | None):
     last_updated_date = datetime.fromisoformat(last_updated) if last_updated else None
     # could maybe do a smaller query since a lot requests are expected to not change
@@ -419,20 +433,13 @@ async def updated_game(game_code: str, last_updated: str | None):
     black = len([c for c in game.cards if c.kind == GameCardKind.BLACK])
     tan_guessed = len([c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed])
     tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
-    more_recent_game = session.scalar(
-        select(Game)
-        .filter(Game.code != game.code)
-        .filter(Game.session_id == game.session_id)
-        .order_by(desc(Game.rowid))
-        .limit(1)
-    )
     return (
         *[CardBoard(c, game) for c in game.cards if c.is_guessed],
         Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
         Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
         Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
         Span(id=repr(GameCardKind.TAN), hx_swap_oob="true")(f"{tan_guessed}/{tan}"),
-        None if more_recent_game is None else NextGameButton(more_recent_game, "Next Game", True),
+        NextGameButton(game),
         Selections(game),
     )
 
@@ -448,7 +455,7 @@ players: dict[str, WebSocketPlayerData] = {}
 
 
 async def update_game():
-    for uuid, player in players.items():
+    for uuid, player in dict(players).items():
         try:
             game = session.scalar(select(Game).where(Game.code == player.game_code))
             if game is None:
@@ -457,6 +464,7 @@ async def update_game():
             fhtml_game = await updated_game(player.game_code, player.last_updated)
             if fhtml_game is None:
                 # case where game shouldn't be updated
+                print("skipping send")
                 continue
             await player.websocket.send_text(to_xml(fhtml_game))
             player.last_updated = str(game.last_updated)
@@ -509,7 +517,7 @@ async def select_card(request: Request, game_card_id: int):
     game.last_updated = datetime.now()
     session.commit()
     current_selection = session.scalar(
-        select(Selection).filter(Selection.token == token and Selection.game_code == game_code)
+        select(Selection).filter(Selection.token == token).filter(Selection.game_code == game_code)
     )
     if current_selection is not None and current_selection.card_phrase == card.card_phrase:
         # they reselected the same card so unselect it

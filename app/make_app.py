@@ -27,9 +27,9 @@ _hdrs = (
                """),
 )
 PARTIALS_PREFIX = "/partials"
-ASSETS_PATH = "./assets"
-SCRIPTS_PATH = "./scripts"
-CSS_PATH = "./css"
+ASSETS_PATH = "/assets"
+SCRIPTS_PATH = "/scripts"
+CSS_PATH = "/css"
 
 # session is currently only used to track who's guessing what
 #    could be fairly easily be abused / manipulated and make many different token
