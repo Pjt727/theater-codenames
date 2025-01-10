@@ -34,6 +34,8 @@ CSS_PATH = "/css"
 # session is currently only used to track who's guessing what
 #    could be fairly easily be abused / manipulated and make many different token
 SITE_TOKEN = "session_id"
+IS_DARK_MODE_TOKEN = "use_dark_mode"
+
 TOKEN_SIZE = 32
 
 

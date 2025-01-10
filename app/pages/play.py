@@ -5,7 +5,7 @@ from models.game import *
 from models.errors import *
 from sqlalchemy.orm import joinedload
 from starlette.requests import Request
-from make_app import app, PARTIALS_PREFIX, SITE_TOKEN
+from make_app import app, PARTIALS_PREFIX, SITE_TOKEN, IS_DARK_MODE_TOKEN
 from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
 from starlette.websockets import WebSocket, WebSocketDisconnect

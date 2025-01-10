@@ -1,8 +1,19 @@
 from fasthtml.common import *
-from make_app import ASSETS_PATH
+from make_app import ASSETS_PATH, app
+
+
+def Settings(req: Request):
+    return Nav(cls="navbar bg-body-tertiary")(
+        Div(cls="container-fluid")(
+            A("Home", cls="navbar-brand", href=app.url_path_for("home")), Div()
+        )
+    )
 
 
 def Page(req: Request, title: str, *c):
+    # implementing simple, limited SPA where everything but the containers switch
+    # this is not really that useful in this case but you could imagine something like
+    #   this could be nice
     if "hx-request" in req.headers.keys():
         return (
             Container(*c, id="rootEl"),
@@ -59,4 +70,6 @@ def Message(*c, title="Codenames", title_secondary: str = "", kind: MessageKind 
     )
 
 
+# might want to find a differetn place for the messages to live if you want them
+#   to persist on partial page refreshes (the hx-push stuff)
 MessageStack = lambda: Div(id="messages", cls="toast-container p-4 position-absolute top-0 end-0")
