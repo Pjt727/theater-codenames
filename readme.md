@@ -17,7 +17,7 @@ the game on a larger external display which may be in addition to the actual boa
 - this project is written with [fasthtml](https://github.com/AnswerDotAI/fasthtmlc)
     - a fullstack python framework which leverages [htmx](https://htmx.org/) and [starlette](https://www.starlette.io/)
     - the main concept is using python object as html elements that are then converted by the library
-- [SQLalchemy](https://www.sqlalchemy.org/) is also used as an ORM to conenct to a [SQLite](https://www.sqlite.org/) database for persistance
+- [SQLalchemy](https://www.sqlalchemy.org/) is also used as an ORM connected to a [SQLite](https://www.sqlite.org/) database for persistance
 
 ## how to run
 - install python <= 3.12
