@@ -20,10 +20,13 @@ the game on a larger external display which may be in addition to the actual boa
 2. select all packs you want to play with
 3. make game
 4. select the appropiate role (spymasters will have to see the spymaster role view, all other players must not see the spymaster screen)
+
 |Role | can see unrevealed words | can make new game | can confirm words | can select words |
+|-----------|--------------------------|-------------------|-------------------|------------------|
 |Spymaster | [x] | [x] | [x]| [x] |
 |Operative | [ ] | [x] | [x]| [x] |
 |Viewer | [ ] | [ ] | [ ]| [x] |
+
 5. Continue to game where other players can join the same game with the code
 6. If a new game is made all other players will be able to go to that same next game with the same button
 - New games will never have words that were previosly used in games before it
