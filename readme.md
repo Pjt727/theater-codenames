@@ -23,9 +23,9 @@ the game on a larger external display which may be in addition to the actual boa
 
 |Role | can see unrevealed words | can make new game | can confirm words | can select words |
 |-----------|--------------------------|-------------------|-------------------|------------------|
-|Spymaster | [x] | [x] | [x]| [x] |
-|Operative | [ ] | [x] | [x]| [x] |
-|Viewer | [ ] | [ ] | [ ]| [x] |
+|Spymaster | ✅ | ✅ | ✅| ✅ |
+|Operative | ❌ | ✅ | ✅| ✅ |
+|Viewer | ❌ | ❌ | ❌| ✅ |
 
 5. Continue to game where other players can join the same game with the code
 6. If a new game is made all other players will be able to go to that same next game with the same button
