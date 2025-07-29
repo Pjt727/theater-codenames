@@ -1,6 +1,6 @@
 # Codenames
 Replicates the board game codenames. Their official online website is at https://codenames.game.
-This project is meant to be played with people who are already in communicated and is thus much
+This project is meant to be played with people who are already in communication and is thus much
 less structured and closer to the experience of playing the board game.
 
 ## Features
