@@ -43,16 +43,15 @@ less structured and closer to the experience of playing the board game.
 
 ## how to run
 - install python <= 3.12
-- create a python env (optional)
-- download python dependencies
-    - `pip install -r requirements.txt`
-- load the database 
-    - `python manage.py load database` (in app directory)
-- add word default word packs to the game
-    - `python manage.py load cards` (in app directory)
-- run the app
-    - `python main.py` (in app directory)
+- download dependencies from pyproject.toml
+- load the database and cards, ex:
+    - `python manage.py load database`
+    - `python manage.py load cards`
+- example process using uv
+1. `cd app`
+2. `uv run manage.py load database`
+3. `uv run manage.py load cards`
+4. `uv run main.py`
 - to add other word packs make a new line separated file like `app/cards/general.txt` and pass it and a tag name as flags to the load cards command
     - `python manage.py load cards --file_path cards/general.txt --tag general-words` (in app directory)
-- this is a uvicorn app so it it can easily be hosted locally
 

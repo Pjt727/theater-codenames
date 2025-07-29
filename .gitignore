@@ -1,4 +1,6 @@
 venv
+.venv
+.nvim.lua
 .sesskey
 *.db
 *.sqlite3
