@@ -42,6 +42,7 @@ less structured and closer to the experience of playing the board game.
 - websockets are used for fast updates
 
 ## how to run
+### with python
 - install python <= 3.12
 - download dependencies from pyproject.toml
 - load the database and cards, ex:
@@ -54,4 +55,16 @@ less structured and closer to the experience of playing the board game.
 4. `uv run main.py`
 - to add other word packs make a new line separated file like `app/cards/general.txt` and pass it and a tag name as flags to the load cards command
     - `python manage.py load cards --file_path cards/general.txt --tag general-words` (in app directory)
+
+### docker
+- install the docker cli and buildx
+- build the docker image 
+    - `docker buildx build -t theater-codenames .`
+    - this build image will use the default word list, you would need to edit the docker image to add your own words
+- run the container automatically mapping exposed ports
+    - `docker -P theater-codenames:lastest`
+- see the port that was assigned to the running docker container
+    - `docker ps`
+    - the assigned port will be on the left hand side of the PORTS column
+- navigate to `localhost:[PORT NUMBER]`
 
