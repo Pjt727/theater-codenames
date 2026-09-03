@@ -11,6 +11,7 @@ from sqlalchemy import (
 )
 import random
 import string
+import secrets
 from sqlalchemy.sql.expression import func
 from fasthtml.ft import *
 from models.config import Base, session
@@ -21,6 +22,8 @@ from sqlalchemy.orm import Mapped, validates
 from sqlalchemy.orm import mapped_column, relationship
 from enum import Enum as PyEnum
 from typing import Optional
+
+JOIN_CODE_BYTES = 6  # produces 8-char base64url string
 
 CARDS_PER_GAME = 25
 GUESS_AMOUNT = 8
@@ -66,9 +69,13 @@ class Session(Base):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True, autoincrement=True)
     name: Mapped[Optional[str]] = mapped_column(String())
     date_created: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    has_warden: Mapped[bool] = mapped_column(Boolean(), default=False)
+    warden_token: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
 
     session_tag_groupers: Mapped[list["SessionTagGrouper"]] = relationship(back_populates="session")
     games: Mapped[list["Game"]] = relationship(back_populates="session")
+    join_codes: Mapped[list["SessionJoinCode"]] = relationship(back_populates="game_session")
+    player_roles: Mapped[list["PlayerSessionRole"]] = relationship(back_populates="game_session")
 
     def create_game(self) -> "Game":
         # figure out who goes first and gets the additional
@@ -76,13 +83,19 @@ class Session(Base):
         if random.random() < 0.5:
             red = [GameCardKind.RED] * (GUESS_AMOUNT + 1)
             blue = [GameCardKind.BLUE] * GUESS_AMOUNT
+            starting_team = "RED"
         else:
             red = [GameCardKind.RED] * GUESS_AMOUNT
             blue = [GameCardKind.BLUE] * (GUESS_AMOUNT + 1)
+            starting_team = "BLUE"
 
         # TODO ensure random string is not already in the db
         random_string = "".join(random.choices(string.ascii_uppercase, k=GAME_CODE_SIZE))
-        game = Game(code=random_string, session_id=self.id)
+        game = Game(
+            code=random_string,
+            session_id=self.id,
+            active_team=starting_team if self.has_warden else None,
+        )
         session.add(game)
 
         # get the random cards for the next game
@@ -134,6 +147,8 @@ class Game(Base):
     # integrity does not really matter as much for this because it should only be used
     #   to match game state
     last_updated: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    active_team: Mapped[Optional[str]] = mapped_column(String(), nullable=True)  # "RED" or "BLUE"
+    winner: Mapped[Optional[str]] = mapped_column(String(), nullable=True)  # "RED", "BLUE", or "BLACK"
 
     cards: Mapped[list["GameCard"]] = relationship(back_populates="game")
     session: Mapped["Session"] = relationship(back_populates="games")
@@ -168,13 +183,13 @@ class GameCardKind(PyEnum):
 
     def to_styles(self) -> str:
         if self == GameCardKind.RED:
-            return "background-color: #dc3546;"
+            return "background-color: #dc3546 !important;"
         elif self == GameCardKind.BLUE:
-            return "background-color: #0d6efd;"
+            return "background-color: #0d6efd !important;"
         elif self == GameCardKind.BLACK:
-            return "background-color: #343a40; color: #fff;"
+            return "background-color: #343a40 !important; color: #fff !important;"
         elif self == GameCardKind.TAN:
-            return "background-color: #fec007;"
+            return "background-color: #fec007 !important;"
         raise ValueError("Unexpected enum")
 
     def __repr__(self) -> str:
@@ -229,3 +244,36 @@ class Selection(Base):
         if len(token) > 64:
             raise ValueError("Invalid token size")
         return token
+
+
+class SessionJoinCode(Base):
+    __tablename__ = "SessionJoinCodes"
+    code: Mapped[str] = mapped_column(String(), primary_key=True)
+    session_id: Mapped[int] = mapped_column(Integer(), ForeignKey("Sessions.id"))
+    team: Mapped[str] = mapped_column(String())  # "RED" or "BLUE"
+    role: Mapped[str] = mapped_column(String())  # "SPYMASTER" or "VIEWER"
+
+    game_session: Mapped["Session"] = relationship(back_populates="join_codes")
+
+
+class PlayerSessionRole(Base):
+    __tablename__ = "PlayerSessionRoles"
+    token: Mapped[str] = mapped_column(String(), primary_key=True)
+    session_id: Mapped[int] = mapped_column(Integer(), ForeignKey("Sessions.id"), primary_key=True)
+    team: Mapped[str] = mapped_column(String())  # "RED", "BLUE", or "WARDEN"
+    role: Mapped[str] = mapped_column(String())  # "SPYMASTER", "VIEWER", or "WARDEN"
+
+    game_session: Mapped["Session"] = relationship(back_populates="player_roles")
+
+    @validates("token")
+    def validate_token(self, _, token):
+        if len(token) > 64:
+            raise ValueError("Invalid token size")
+        return token
+
+
+# Run on startup: create any new tables and migrate new columns on existing tables
+from models.config import run_migrations, engine as _engine  # noqa: E402
+
+Base.metadata.create_all(_engine)
+run_migrations()

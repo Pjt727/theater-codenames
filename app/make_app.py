@@ -2,6 +2,12 @@ from fasthtml.common import *
 from fasthtml.svg import Path
 from starlette.requests import Request
 import secrets
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SITE_URL = os.environ.get("SITE_URL", "http://localhost:5001").rstrip("/")
 
 _hdrs = (
     # boostrap cdn v5.3
@@ -17,6 +23,7 @@ _hdrs = (
         crossorigin="anonymous",
     ),
     Script(src="https://unpkg.com/htmx.org@1.9.12/dist/ext/ws.js"),
+    Script(src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"),
     # some javascript abbreviations
     #  (i like this better than using some of the other mini js frameworks)
     Script("""

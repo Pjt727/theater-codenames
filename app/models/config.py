@@ -1,5 +1,5 @@
 from typing import Type, TypeVar, Tuple
-from sqlalchemy import create_engine, Integer, select, Select
+from sqlalchemy import create_engine, Integer, select, Select, text, inspect as sa_inspect
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.orm import DeclarativeBase
 
@@ -27,3 +27,26 @@ DB_URI = "sqlite:///cards.db"
 # Create the engine and session
 engine = create_engine(DB_URI)
 session = Session(engine)
+
+
+def run_migrations() -> None:
+    """Add new columns to existing tables without dropping data."""
+    with engine.connect() as conn:
+        inspector = sa_inspect(engine)
+        existing_tables = inspector.get_table_names()
+
+        if "Sessions" in existing_tables:
+            sessions_cols = {c["name"] for c in inspector.get_columns("Sessions")}
+            if "has_warden" not in sessions_cols:
+                conn.execute(text("ALTER TABLE Sessions ADD COLUMN has_warden BOOLEAN NOT NULL DEFAULT 0"))
+            if "warden_token" not in sessions_cols:
+                conn.execute(text("ALTER TABLE Sessions ADD COLUMN warden_token VARCHAR"))
+
+        if "Games" in existing_tables:
+            games_cols = {c["name"] for c in inspector.get_columns("Games")}
+            if "active_team" not in games_cols:
+                conn.execute(text("ALTER TABLE Games ADD COLUMN active_team VARCHAR"))
+            if "winner" not in games_cols:
+                conn.execute(text("ALTER TABLE Games ADD COLUMN winner VARCHAR"))
+
+        conn.commit()

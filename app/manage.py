@@ -45,7 +45,11 @@ BASE_CARDS_DIR = "cards"
 # words may be parts of many different categorys
 def create_default_words():
     # related words for computer science found from the relatedwords.io game
-    files_tags_to_source_from = [("compsci.txt", "Computer Science"), ("general.txt", "Base Game")]
+    files_tags_to_source_from = [
+        ("compsci.txt", "Computer Science"),
+        ("general.txt", "Base Game"),
+        ("codenames.txt", "Codenames"),
+    ]
 
     for file_name, tag in files_tags_to_source_from:
         create_words(os.path.join(BASE_CARDS_DIR, file_name), tag)
