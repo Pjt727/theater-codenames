@@ -6,7 +6,14 @@ from models.errors import *
 from sqlalchemy.orm import joinedload
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
-from make_app import app, PARTIALS_PREFIX, SITE_TOKEN, IS_DARK_MODE_TOKEN, SITE_URL
+from make_app import (
+    app,
+    PARTIALS_PREFIX,
+    SITE_TOKEN,
+    IS_DARK_MODE_TOKEN,
+    SITE_URL,
+    ASSETS_PATH,
+)
 from multipart.exceptions import MultipartParseError
 from pages.components import MessageKind, MessageStack, Page, Message
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -39,7 +46,9 @@ class GameRole(Enum):
         return f"game_role_{self.value}"
 
 
-def get_player_session_role(game_session_id: int, token: str) -> "PlayerSessionRole | None":
+def get_player_session_role(
+    game_session_id: int, token: str
+) -> "PlayerSessionRole | None":
     return session.scalar(
         select(PlayerSessionRole)
         .filter(PlayerSessionRole.session_id == game_session_id)
@@ -50,10 +59,14 @@ def get_player_session_role(game_session_id: int, token: str) -> "PlayerSessionR
 def get_visible_tokens(game: "Game", viewer_token: str) -> set[str]:
     """Return the set of tokens whose selections this viewer should see."""
     player_roles = session.scalars(
-        select(PlayerSessionRole).filter(PlayerSessionRole.session_id == game.session_id)
+        select(PlayerSessionRole).filter(
+            PlayerSessionRole.session_id == game.session_id
+        )
     ).all()
 
-    viewer_role = next((r for r in player_roles if r.token == viewer_token), None)
+    viewer_role = next(
+        (r for r in player_roles if r.token == viewer_token), None
+    )
     if viewer_role is None:
         return set()
 
@@ -61,7 +74,11 @@ def get_visible_tokens(game: "Game", viewer_token: str) -> set[str]:
 
     if viewer_role.role == "WARDEN":
         # Warden sees active team's non-spymasters
-        return {r.token for r in player_roles if r.team == active_team and r.role != "SPYMASTER"}
+        return {
+            r.token
+            for r in player_roles
+            if r.team == active_team and r.role != "SPYMASTER"
+        }
     elif viewer_role.role == "VIEWER":
         # Viewers see their own team's selections
         return {r.token for r in player_roles if r.team == viewer_role.team}
@@ -70,7 +87,8 @@ def get_visible_tokens(game: "Game", viewer_token: str) -> set[str]:
         return {
             r.token
             for r in player_roles
-            if (r.team == viewer_role.team and r.role == "SPYMASTER") or r.team == active_team
+            if (r.team == viewer_role.team and r.role == "SPYMASTER")
+            or r.team == active_team
         }
 
     return set()
@@ -94,6 +112,9 @@ def CardBoard(
     is_update: bool = True,
     is_users_selection: bool = False,
     allow_selection: bool = True,
+    game_over: bool = False,
+    viewer_is_spymaster: bool = False,
+    is_warden_game: bool = False,
 ):
     active_attributes = {
         "hx_post": app.url_path_for("select_card", game_code=game.code),
@@ -103,17 +124,26 @@ def CardBoard(
     }
 
     row, col = card.to_row_col()
-    card_class = card.kind.to_bs_class() if card.is_guessed else "bg-white"
-    clickable = allow_selection and not card.is_guessed
+
+    if game_over:
+        card_class = card.kind.to_bs_class()  # reveal all card colors
+        # spymasters: fade guessed (they were "used"); viewers/warden: fade unguessed
+        faded = card.is_guessed if viewer_is_spymaster else not card.is_guessed
+        strikethrough = False
+    else:
+        card_class = card.kind.to_bs_class() if card.is_guessed else "bg-white"
+        faded = False if is_warden_game else card.is_guessed
+        strikethrough = card.is_guessed and not is_warden_game
+
+    clickable = allow_selection and not card.is_guessed and not game_over
     return Div(
-        # unselected-card matches the generated css for spy masters to have color
         id=f"game-card-{card.rowid}",
         hx_swap_oob="true" if is_update else None,
         cls=f"rounded-3 position-relative border text-center unselected-card-{card.index} {card_class} p-3 {"text-decoration-underline" if is_users_selection else ""}",
-        style=f"grid-area: {row} / {col} / {row} / {col}; {"opacity: 0.45; " if card.is_guessed else ""}{"" if not clickable else "cursor: pointer"}",
+        style=f"grid-area: {row} / {col} / {row} / {col}; {"opacity: 0.45; " if faded else ""}{"cursor: pointer" if clickable else ""}",
         **({} if not clickable else active_attributes),
     )(
-        Div(cls=f"{"text-decoration-line-through" if card.is_guessed else ""}")(
+        Div(cls=f"{"text-decoration-line-through" if strikethrough else ""}")(
             card.card_phrase.title(),
         )
     )
@@ -124,14 +154,36 @@ def GameBoard(
     is_update: bool = True,
     allow_selection: bool = True,
     visible_tokens: "set[str] | None" = None,
+    game_over: bool = False,
+    viewer_is_spymaster: bool = False,
+    is_warden_game: bool = False,
 ):
-    return Div(cls="board", id="gameBoard", hx_swap_oob="true" if is_update else None)(
-        *[CardBoard(game_card, game, is_update, allow_selection=allow_selection) for game_card in game.cards],
-        None if is_update else Selections(game, is_update, visible_tokens=visible_tokens),
+    return Div(
+        cls="board", id="gameBoard", hx_swap_oob="true" if is_update else None
+    )(
+        *[
+            CardBoard(
+                game_card,
+                game,
+                is_update,
+                allow_selection=allow_selection,
+                game_over=game_over,
+                viewer_is_spymaster=viewer_is_spymaster,
+                is_warden_game=is_warden_game,
+            )
+            for game_card in game.cards
+        ],
+        (
+            None
+            if is_update
+            else Selections(game, is_update, visible_tokens=visible_tokens)
+        ),
     )
 
 
-def ConfirmButton(game_code: str, game_card_id: int | None = None, is_update: bool = True):
+def ConfirmButton(
+    game_code: str, game_card_id: int | None = None, is_update: bool = True
+):
     return Button(
         "Confirm Selection",
         cls="btn btn-primary",
@@ -162,10 +214,14 @@ def NextGameButton(game: Game, enabled: bool = True, is_update: bool = True):
         "Next Game" if more_recent_game else "Make Game",
         id="next_game",
         cls="btn btn-success",
-        hx_post=app.url_path_for("continue_game") if not more_recent_game else None,
-        hx_get=app.url_path_for("play_game", game_code=more_recent_game.code)
-        if more_recent_game
-        else None,
+        hx_post=(
+            app.url_path_for("continue_game") if not more_recent_game else None
+        ),
+        hx_get=(
+            app.url_path_for("play_game", game_code=more_recent_game.code)
+            if more_recent_game
+            else None
+        ),
         hx_swap="none",
         hx_swap_oob="true" if is_update else None,
         hx_vals={"session_id": game.session_id, "game_code": game.code},
@@ -175,19 +231,27 @@ def NextGameButton(game: Game, enabled: bool = True, is_update: bool = True):
 
 
 def UserSelectedStyle(game_card: GameCard | None, is_update: bool = True):
-    style = Style(id="userSelectedStyle", hx_swap_oob="true" if is_update else None)
+    style = Style(
+        id="userSelectedStyle", hx_swap_oob="true" if is_update else None
+    )
     if game_card is None:
         return style
-    return style(f"#game-card-{game_card.rowid} {{ text-decoration: underline; }}")
+    return style(
+        f"#game-card-{game_card.rowid} {{ text-decoration: underline; }}"
+    )
 
 
-def Selections(game: Game, is_update: bool = True, visible_tokens: "set[str] | None" = None):
+def Selections(
+    game: Game, is_update: bool = True, visible_tokens: "set[str] | None" = None
+):
     selection_containers = []
     for card in game.cards:
         if card.is_guessed:
             continue
         if visible_tokens is not None:
-            relevant_selections = [s for s in card.selections if s.token in visible_tokens]
+            relevant_selections = [
+                s for s in card.selections if s.token in visible_tokens
+            ]
         else:
             relevant_selections = card.selections
         selection_count = len(relevant_selections)
@@ -211,7 +275,9 @@ def Selections(game: Game, is_update: bool = True, visible_tokens: "set[str] | N
             )
         )
     return Div(
-        id="selections", style="display: contents", hx_swap_oob="true" if is_update else None
+        id="selections",
+        style="display: contents",
+        hx_swap_oob="true" if is_update else None,
     )(*selection_containers)
 
 
@@ -230,20 +296,28 @@ def check_and_set_winner(game: "Game") -> None:
             return
 
     red_total = sum(1 for c in game.cards if c.kind == GameCardKind.RED)
-    red_done = sum(1 for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed)
+    red_done = sum(
+        1 for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed
+    )
     if red_total > 0 and red_done == red_total:
         game.winner = "RED"
         return
 
     blue_total = sum(1 for c in game.cards if c.kind == GameCardKind.BLUE)
-    blue_done = sum(1 for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed)
+    blue_done = sum(
+        1 for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed
+    )
     if blue_total > 0 and blue_done == blue_total:
         game.winner = "BLUE"
         return
 
 
-def WinModal(game: "Game", viewer_token: "str | None" = None, is_update: bool = True):
-    container = Div(id="win-modal-container", hx_swap_oob="true" if is_update else None)
+def WinModal(
+    game: "Game", viewer_token: "str | None" = None, is_update: bool = True
+):
+    container = Div(
+        id="win-modal-container", hx_swap_oob="true" if is_update else None
+    )
     if game.winner is None:
         return container
 
@@ -253,7 +327,11 @@ def WinModal(game: "Game", viewer_token: "str | None" = None, is_update: bool = 
     if game.session.has_warden and viewer_token:
         pr = get_player_session_role(game.session_id, viewer_token)
         if pr and pr.role == "WARDEN":
-            headline = f"{'🔴' if winner == 'RED' else '🔵'} {winner.title()} Team Wins!" if winner != "BLACK" else "☠️ Black Card Revealed!"
+            headline = (
+                f"{'🔴' if winner == 'RED' else '🔵'} {winner.title()} Team Wins!"
+                if winner != "BLACK"
+                else "☠️ Black Card Revealed!"
+            )
             won = winner != "BLACK"
         elif pr and pr.team == winner:
             headline = "🎉 You Win!"
@@ -268,17 +346,27 @@ def WinModal(game: "Game", viewer_token: "str | None" = None, is_update: bool = 
         headline = "☠️ Black Card Revealed — Game Over"
         won = False
     else:
-        headline = f"{'🔴' if winner == 'RED' else '🔵'} {winner.title()} Team Wins!"
+        headline = (
+            f"{'🔴' if winner == 'RED' else '🔵'} {winner.title()} Team Wins!"
+        )
         won = True
 
     header_cls = (
-        "bg-danger text-white" if winner == "RED"
-        else "bg-primary text-white" if winner == "BLUE"
-        else "bg-dark text-white"
+        "bg-danger text-white"
+        if winner == "RED"
+        else (
+            "bg-primary text-white"
+            if winner == "BLUE"
+            else "bg-dark text-white"
+        )
     )
 
     if won and winner in ("RED", "BLUE"):
-        colors = '["#dc3545","#ff6b6b","#fff"]' if winner == "RED" else '["#0d6efd","#6ea8fe","#fff"]'
+        colors = (
+            '["#dc3545","#ff6b6b","#fff"]'
+            if winner == "RED"
+            else '["#0d6efd","#6ea8fe","#fff"]'
+        )
         confetti_code = (
             f"var end=Date.now()+4000;"
             f"(function f(){{"
@@ -294,14 +382,23 @@ def WinModal(game: "Game", viewer_token: "str | None" = None, is_update: bool = 
             Div(cls="modal-dialog modal-dialog-centered")(
                 Div(cls="modal-content")(
                     Div(cls=f"modal-header {header_cls} border-0")(
-                        H2(headline, cls="modal-title w-100 text-center fw-bold fs-2 py-3"),
+                        H2(
+                            headline,
+                            cls="modal-title w-100 text-center fw-bold fs-2 py-3",
+                        ),
                     )
                 )
             )
         ),
         Script(
+            f"(function(){{"
+            f"var key='win_shown_{game.code}';"
+            f"if(!sessionStorage.getItem(key)){{"
+            f"sessionStorage.setItem(key,'1');"
             f"bootstrap.Modal.getOrCreateInstance(document.getElementById('winModal')).show();"
             f"{confetti_code}"
+            f"}}"
+            f"}})();"
         ),
     )
 
@@ -321,7 +418,11 @@ def TeamBackground(active_team: "str | None", is_update: bool = True):
     )
 
 
-def TurnIndicator(active_team: "str | None", winner: "str | None" = None, is_update: bool = True):
+def TurnIndicator(
+    active_team: "str | None",
+    winner: "str | None" = None,
+    is_update: bool = True,
+):
     if active_team is None and winner is None:
         return None
     if winner in ("RED", "BLUE"):
@@ -342,6 +443,87 @@ def TurnIndicator(active_team: "str | None", winner: "str | None" = None, is_upd
         id="turn-indicator",
         hx_swap_oob="true" if is_update else None,
         cls="mb-2",
+    )
+
+
+_fs_board_rules = "height:72vh;font-size:clamp(1.2rem,3vmin,2.4rem)"
+_fs_card_rules = (
+    "display:flex !important;align-items:center !important;"
+    "justify-content:center !important;font-weight:600;height:100%"
+)
+_fs_root_rules = (
+    "flex:1;display:flex;flex-direction:column;"
+    "justify-content:center;max-width:100% !important;padding:1rem"
+)
+
+_LOGO_PATH = f"{ASSETS_PATH}/impiricus-logo.png"
+
+
+# Hidden by default; shown in fullscreen via CSS
+def _FsLogo():
+    return Img(
+        id="fs-logo", src=_LOGO_PATH, alt="Impiricus", style="display:none"
+    )
+
+
+_fullscreen_board_css = (
+    # Standard + webkit fullscreen API selectors
+    ":fullscreen,:fullscreen body{height:100% !important}"
+    ":fullscreen body{display:flex;flex-direction:column}"
+    f":fullscreen #rootEl{{{_fs_root_rules}}}"
+    f":fullscreen #gameBoard{{{_fs_board_rules}}}"
+    f":fullscreen #gameBoard>div.rounded-3{{{_fs_card_rules}}}"
+    ":-webkit-full-screen,:-webkit-full-screen body{height:100% !important}"
+    ":-webkit-full-screen body{display:flex;flex-direction:column}"
+    f":-webkit-full-screen #rootEl{{{_fs_root_rules}}}"
+    f":-webkit-full-screen #gameBoard{{{_fs_board_rules}}}"
+    f":-webkit-full-screen #gameBoard>div.rounded-3{{{_fs_card_rules}}}"
+    ":fullscreen body,:-webkit-full-screen body{"
+    "background-image:"
+    "linear-gradient(to right,white 0%,transparent 18%,transparent 40%,white 100%),"
+    "url('/assets/impiricus-wave.svg') !important;"
+    "background-position:bottom center,bottom center !important;"
+    "background-size:100% auto,100% auto !important;"
+    "background-repeat:no-repeat,no-repeat !important;"
+    "background-attachment:fixed,fixed !important}"
+    ":fullscreen #fs-logo,:-webkit-full-screen #fs-logo"
+    "{display:inline-block !important;height:12rem;opacity:0.85;"
+    "vertical-align:middle;margin-left:auto}"
+)
+
+_fullscreen_js = (
+    "(function(){"
+    "var inFS=document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement;"
+    "if(!inFS){"
+    "var req=document.documentElement.requestFullscreen"
+    "||document.documentElement.webkitRequestFullscreen"
+    "||document.documentElement.mozRequestFullScreen"
+    "||document.documentElement.msRequestFullscreen;"
+    "if(!req){alert('Fullscreen not supported on this device/browser.');return;}"
+    "req.call(document.documentElement).then(function(){"
+    "if(screen.orientation&&screen.orientation.lock){"
+    "screen.orientation.lock('landscape').catch(function(){});"
+    "}"
+    "this.textContent='\u00d7 Exit Full Screen';"
+    "}.bind(this)).catch(function(){"
+    "alert('Fullscreen not supported on this device/browser.');"
+    "});"
+    "}else{"
+    "var ex=document.exitFullscreen||document.webkitExitFullscreen"
+    "||document.mozCancelFullScreen||document.msExitFullscreen;"
+    "if(ex)ex.call(document);"
+    "this.textContent='\u26f6 Full Screen';"
+    "}"
+    "}).call(this);"
+)
+
+
+def FullScreenButton():
+    return Button(
+        "\u26f6 Full Screen",
+        cls="btn btn-outline-secondary me-2",
+        type="button",
+        onclick=_fullscreen_js,
     )
 
 
@@ -377,7 +559,10 @@ def WardenLinksPanel(join_codes: list, game_code: str):
     }
     rows = []
     for jc in join_codes:
-        label, btn_cls = labels.get((jc.team, jc.role), (f"{jc.team} {jc.role}", "btn-outline-secondary"))
+        label, btn_cls = labels.get(
+            (jc.team, jc.role),
+            (f"{jc.team} {jc.role}", "btn-outline-secondary"),
+        )
         url = f"{SITE_URL}/join/{jc.code}"
         qr_url = app.url_path_for("qr_code", join_code=jc.code)
         copy_link_js = (
@@ -406,7 +591,7 @@ def WardenLinksPanel(join_codes: list, game_code: str):
                 ),
             )
         )
-    return Div(cls="mb-3 p-3 border rounded")(
+    return Div(id="warden-links", cls="mb-3 p-3")(
         P(Strong("Join Links (share with players):"), cls="mb-2"),
         *rows,
     )
@@ -504,7 +689,10 @@ class MakeGameData:
 @app.post("/play")
 def make_game(request: Request, game_data: MakeGameData):
     if len(game_data.tags) == 0:
-        return Message(Div(f"Please select some categories for the game"), kind=MessageKind.ERROR)
+        return Message(
+            Div(f"Please select some categories for the game"),
+            kind=MessageKind.ERROR,
+        )
 
     token = request.session.get(SITE_TOKEN)
     is_warden = bool(game_data.warden_mode)
@@ -518,7 +706,8 @@ def make_game(request: Request, game_data: MakeGameData):
     # need to generate that id
     session.flush()
     groupers = [
-        SessionTagGrouper(session_id=game_session.id, tag_id=tag_id) for tag_id in game_data.tags
+        SessionTagGrouper(session_id=game_session.id, tag_id=tag_id)
+        for tag_id in game_data.tags
     ]
     session.add_all(groupers)
     session.flush()
@@ -538,12 +727,14 @@ def make_game(request: Request, game_data: MakeGameData):
 
     if is_warden:
         # Register warden's role
-        session.add(PlayerSessionRole(
-            token=token,
-            session_id=game_session.id,
-            team="WARDEN",
-            role="WARDEN",
-        ))
+        session.add(
+            PlayerSessionRole(
+                token=token,
+                session_id=game_session.id,
+                team="WARDEN",
+                role="WARDEN",
+            )
+        )
         # Generate 4 join codes: red/blue × spymaster/viewer
         join_codes = [
             SessionJoinCode(
@@ -562,12 +753,16 @@ def make_game(request: Request, game_data: MakeGameData):
         session.add_all(join_codes)
 
     session.commit()
-    return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
+    return HttpHeader(
+        "HX-Redirect", app.url_path_for("play_game", game_code=game.code)
+    )
 
 
 def _resolve_join_code(join_code: str) -> "tuple[SessionJoinCode, Game] | None":
     """Look up a join code and return (SessionJoinCode, most_recent_game) or None."""
-    jc = session.scalar(select(SessionJoinCode).filter(SessionJoinCode.code == join_code))
+    jc = session.scalar(
+        select(SessionJoinCode).filter(SessionJoinCode.code == join_code)
+    )
     if jc is None:
         return None
     most_recent = session.scalar(
@@ -583,12 +778,16 @@ def _resolve_join_code(join_code: str) -> "tuple[SessionJoinCode, Game] | None":
 
 def _upsert_player_role(token: str, jc: "SessionJoinCode") -> None:
     """Always sync the current session token to the join code's team/role."""
-    stmt = sqlite_insert(PlayerSessionRole).values(
-        token=token,
-        session_id=jc.session_id,
-        team=jc.team,
-        role=jc.role,
-    ).on_conflict_do_update(set_={"team": jc.team, "role": jc.role})
+    stmt = (
+        sqlite_insert(PlayerSessionRole)
+        .values(
+            token=token,
+            session_id=jc.session_id,
+            team=jc.team,
+            role=jc.role,
+        )
+        .on_conflict_do_update(set_={"team": jc.team, "role": jc.role})
+    )
     session.execute(stmt)
     session.commit()
 
@@ -634,7 +833,9 @@ async def continue_game(request: Request, game_code: str, session_id: int):
         .filter(Game.code == game_code)
     )
     if game is None:
-        return Message(Div("The game session no longer exists"), kind=MessageKind.ERROR)
+        return Message(
+            Div("The game session no longer exists"), kind=MessageKind.ERROR
+        )
 
     game_session = game.session
 
@@ -642,16 +843,23 @@ async def continue_game(request: Request, game_code: str, session_id: int):
     if game_session.has_warden:
         token = request.session.get(SITE_TOKEN)
         if token != game_session.warden_token:
-            return Message(Div("Only the warden can start a new game"), kind=MessageKind.ERROR)
+            return Message(
+                Div("Only the warden can start a new game"),
+                kind=MessageKind.ERROR,
+            )
 
     most_recent_game_code = session.scalar(
-        select(Game.code).filter(Game.session_id == session_id).order_by(desc(Game.rowid)).limit(1)
+        select(Game.code)
+        .filter(Game.session_id == session_id)
+        .order_by(desc(Game.rowid))
+        .limit(1)
     )
     assert most_recent_game_code is not None
 
     if most_recent_game_code != game.code:
         return HttpHeader(
-            "HX-Redirect", app.url_path_for("play_game", game_code=most_recent_game_code)
+            "HX-Redirect",
+            app.url_path_for("play_game", game_code=most_recent_game_code),
         )
     # update this to make sure to push the updated new game button
     game.last_updated = datetime.now()
@@ -685,16 +893,20 @@ async def continue_game(request: Request, game_code: str, session_id: int):
             session.delete(old_code)
         session.flush()
         for team in ("RED", "BLUE"):
-            session.add(SessionJoinCode(
-                code=secrets.token_urlsafe(JOIN_CODE_BYTES),
-                session_id=game_session.id,
-                team=team,
-                role="SPYMASTER",
-            ))
+            session.add(
+                SessionJoinCode(
+                    code=secrets.token_urlsafe(JOIN_CODE_BYTES),
+                    session_id=game_session.id,
+                    team=team,
+                    role="SPYMASTER",
+                )
+            )
 
     session.commit()
     await broadcast_redirect(game_code, game.code)
-    return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
+    return HttpHeader(
+        "HX-Redirect", app.url_path_for("play_game", game_code=game.code)
+    )
 
 
 # done as a separate route to play_game for error handling and later possible spymaster locking
@@ -702,30 +914,70 @@ async def continue_game(request: Request, game_code: str, session_id: int):
 def find_game(game_code: str):
     game = session.scalar(select(Game).filter(Game.code == game_code.upper()))
     if game is None:
-        return Message(Div(f"The game `{game_code}` could not be found"), kind=MessageKind.ERROR)
+        return Message(
+            Div(f"The game `{game_code}` could not be found"),
+            kind=MessageKind.ERROR,
+        )
 
-    return HttpHeader("HX-Redirect", app.url_path_for("play_game", game_code=game.code))
+    return HttpHeader(
+        "HX-Redirect", app.url_path_for("play_game", game_code=game.code)
+    )
 
 
 def _score_row(game: "Game"):
-    red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
+    red_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed]
+    )
     red = len([c for c in game.cards if c.kind == GameCardKind.RED])
-    blue_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed])
+    blue_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed]
+    )
     blue = len([c for c in game.cards if c.kind == GameCardKind.BLUE])
-    black_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLACK and c.is_guessed])
+    black_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.BLACK and c.is_guessed]
+    )
     black = len([c for c in game.cards if c.kind == GameCardKind.BLACK])
-    tan_guessed = len([c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed])
+    tan_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed]
+    )
     tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
     return Div(
-        Span(cls="pe-3")("Red:", Span(id=repr(GameCardKind.RED))(f"{red_guessed}/{red}")),
-        Span(cls="pe-3")("Blue:", Span(id=repr(GameCardKind.BLUE))(f"{blue_guessed}/{blue}")),
-        Span(cls="pe-3")("Black:", Span(id=repr(GameCardKind.BLACK))(f"{black_guessed}/{black}")),
-        Span(cls="pe-3")("Tan:", Span(id=repr(GameCardKind.TAN))(f"{tan_guessed}/{tan}")),
+        Span(cls="pe-3")(
+            "Red:", Span(id=repr(GameCardKind.RED))(f"{red_guessed}/{red}")
+        ),
+        Span(cls="pe-3")(
+            "Blue:", Span(id=repr(GameCardKind.BLUE))(f"{blue_guessed}/{blue}")
+        ),
+        Span(cls="pe-3")(
+            "Black:",
+            Span(id=repr(GameCardKind.BLACK))(f"{black_guessed}/{black}"),
+        ),
+        Span(cls="pe-3")(
+            "Tan:", Span(id=repr(GameCardKind.TAN))(f"{tan_guessed}/{tan}")
+        ),
+        cls="bg-white bg-opacity-75 rounded-2 px-2 py-1 d-inline-block",
+    )
+
+
+def _BottomPanel(game: "Game", *button_rows):
+    """Score row + button rows on the left, logo spanning full height on the right (fullscreen only)."""
+    return Div(cls="d-flex align-items-stretch gap-3 mt-1")(
+        Div(
+            cls="flex-grow-1 d-flex flex-column justify-content-center align-items-start"
+        )(
+            _score_row(game),
+            *button_rows,
+        ),
+        Img(
+            id="fs-logo", src=_LOGO_PATH, alt="Impiricus", style="display:none"
+        ),
     )
 
 
 @app.get("/play/{game_code:str}")
-def play_game(request: Request, role: str | None = None, join: str | None = None):
+def play_game(
+    request: Request, role: str | None = None, join: str | None = None
+):
     game_code = request.path_params["game_code"]
     token = request.session.get(SITE_TOKEN)
     game = session.scalar(
@@ -755,33 +1007,60 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
     if game_session.has_warden:
         # Upsert role from join code on every load so it always tracks the current cookie
         if join:
-            jc = session.scalar(select(SessionJoinCode).filter(SessionJoinCode.code == join))
+            jc = session.scalar(
+                select(SessionJoinCode).filter(SessionJoinCode.code == join)
+            )
             if jc and jc.session_id == game_session.id:
                 _upsert_player_role(token, jc)
 
         # Is this person the warden?
         if token == game_session.warden_token:
             join_codes = session.scalars(
-                select(SessionJoinCode).filter(SessionJoinCode.session_id == game_session.id)
+                select(SessionJoinCode).filter(
+                    SessionJoinCode.session_id == game_session.id
+                )
             ).all()
             visible_tokens = get_visible_tokens(game, token)
-            display_team = game.winner if game.winner in ("RED", "BLUE") else game.active_team
+            display_team = (
+                game.winner
+                if game.winner in ("RED", "BLUE")
+                else game.active_team
+            )
             return Page(
                 request,
                 "Play (Warden)",
                 Style(board_css),
+                Style(
+                    ":fullscreen #next_game,:fullscreen #warden-links{display:none !important}"
+                    ":-webkit-full-screen #next_game,:-webkit-full-screen #warden-links{display:none !important}"
+                    + _fullscreen_board_css
+                ),
                 TeamBackground(display_team, is_update=False),
                 UserSelectedStyle(None, is_update=False),
-                Div(hx_ext="ws", ws_connect=app.url_path_for("play_connect", game_code=game_code)),
+                Div(
+                    hx_ext="ws",
+                    ws_connect=app.url_path_for(
+                        "play_connect", game_code=game_code
+                    ),
+                ),
                 Div(id="game-redirect"),
                 TurnIndicator(game.active_team, game.winner, is_update=False),
-                GameBoard(game, is_update=False, visible_tokens=visible_tokens),
-                _score_row(game),
-                NextGameButton(game, is_update=False),
-                Div(cls="mt-2")(
-                    EndTurnButton(game_code, is_update=False),
-                    AutoConfirmButton(game_code, is_update=False),
-                    ConfirmButton(game.code, is_update=False),
+                GameBoard(
+                    game,
+                    is_update=False,
+                    visible_tokens=visible_tokens,
+                    game_over=game.winner is not None,
+                    is_warden_game=True,
+                ),
+                _BottomPanel(
+                    game,
+                    NextGameButton(game, is_update=False),
+                    Div(cls="mt-2")(
+                        FullScreenButton(),
+                        EndTurnButton(game_code, is_update=False),
+                        AutoConfirmButton(game_code, is_update=False),
+                        ConfirmButton(game.code, is_update=False),
+                    ),
                 ),
                 WardenLinksPanel(join_codes, game_code),
                 WinModal(game, token, is_update=False),
@@ -797,14 +1076,18 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
                 "Play (Join Required)",
                 Div(cls="mt-5")(
                     H3("Join Code Required"),
-                    P("This game requires a join code. Use the link your warden shared, or enter the code below."),
+                    P(
+                        "This game requires a join code. Use the link your warden shared, or enter the code below."
+                    ),
                     Form(
                         hx_post=app.url_path_for("join_game_form"),
                         hx_swap="none",
                     )(
                         Input(name="dummy_value", value="1", hidden=True),
                         Div(cls="d-flex gap-2 mt-3")(
-                            Button("Join", cls="btn btn-primary", type="submit"),
+                            Button(
+                                "Join", cls="btn btn-primary", type="submit"
+                            ),
                             Div(cls="input-group w-auto")(
                                 Input(
                                     cls="form-control",
@@ -823,32 +1106,49 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
         is_spymaster = player_role.role == "SPYMASTER"
         team_label = f"{player_role.team.title()} {'Spymaster' if is_spymaster else 'Viewer'}"
         visible_tokens = get_visible_tokens(game, token)
-        display_team = game.winner if game.winner in ("RED", "BLUE") else game.active_team
+        display_team = (
+            game.winner if game.winner in ("RED", "BLUE") else game.active_team
+        )
         return Page(
             request,
             f"Play ({team_label})",
             Style(board_css),
-            Style(
-                "\n".join(
-                    f".unselected-card-{card.index} {{ {card.kind.to_styles()}; }}"
-                    for card in game.cards
+            Style(_fullscreen_board_css),
+            (
+                Style(
+                    "\n".join(
+                        f".unselected-card-{card.index} {{ {card.kind.to_styles()}; }}"
+                        for card in game.cards
+                    )
                 )
-            ) if is_spymaster else None,
+                if is_spymaster
+                else None
+            ),
             TeamBackground(display_team, is_update=False),
             UserSelectedStyle(None, is_update=False),
-            Div(hx_ext="ws", ws_connect=f"{app.url_path_for('play_connect', game_code=game_code)}?join={join}"),
+            Div(
+                hx_ext="ws",
+                ws_connect=f"{app.url_path_for('play_connect', game_code=game_code)}?join={join}",
+            ),
             Div(id="game-redirect"),
-            Div(cls="mb-1")(
+            Div(cls="mb-1 d-flex align-items-center gap-2")(
                 Span("Your team: ", cls="fw-bold"),
                 Span(
                     f"{player_role.team.title()} {'Spymaster' if is_spymaster else 'Viewer'}",
                     cls=f"badge {'bg-danger' if player_role.team == 'RED' else 'bg-primary'}",
                 ),
+                FullScreenButton(),
             ),
             TurnIndicator(game.active_team, game.winner, is_update=False),
-            GameBoard(game, is_update=False, visible_tokens=visible_tokens),
-            _score_row(game),
-            Div(id="next_game"),
+            GameBoard(
+                game,
+                is_update=False,
+                visible_tokens=visible_tokens,
+                game_over=game.winner is not None,
+                viewer_is_spymaster=is_spymaster,
+                is_warden_game=True,
+            ),
+            _BottomPanel(game, Div(id="next_game")),
             WinModal(game, token, is_update=False),
             MessageStack(),
         )
@@ -863,9 +1163,18 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
                 hx_get=app.url_path_for("play_game", game_code=game_code),
             )(
                 Select(id="role", name="role", cls="form-select mb-2")(
-                    Option(GameRole.SPYMASTER.value.title(), value=repr(GameRole.SPYMASTER)),
-                    Option(GameRole.OPERATIVE.value.title(), value=repr(GameRole.OPERATIVE)),
-                    Option(GameRole.VIEWER.value.title(), value=repr(GameRole.VIEWER)),
+                    Option(
+                        GameRole.SPYMASTER.value.title(),
+                        value=repr(GameRole.SPYMASTER),
+                    ),
+                    Option(
+                        GameRole.OPERATIVE.value.title(),
+                        value=repr(GameRole.OPERATIVE),
+                    ),
+                    Option(
+                        GameRole.VIEWER.value.title(),
+                        value=repr(GameRole.VIEWER),
+                    ),
                 ),
                 Button("Select Role", cls="btn btn-primary", type="input"),
             ),
@@ -876,25 +1185,49 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
         request,
         "Play",
         Style(board_css),
-        Style(
-            "\n".join(
-                f".unselected-card-{card.index} {{ {card.kind.to_styles()}; }}"
-                for card in game.cards
+        Style(_fullscreen_board_css),
+        (
+            Style(
+                "\n".join(
+                    f".unselected-card-{card.index} {{ {card.kind.to_styles()}; }}"
+                    for card in game.cards
+                )
             )
-        ) if role == repr(GameRole.SPYMASTER) else None,
+            if role == repr(GameRole.SPYMASTER)
+            else None
+        ),
         TeamBackground(bg_team, is_update=False) if bg_team else None,
         UserSelectedStyle(None, is_update=False),
-        Div(hx_ext="ws", ws_connect=app.url_path_for("play_connect", game_code=game_code)),
+        Div(
+            hx_ext="ws",
+            ws_connect=app.url_path_for("play_connect", game_code=game_code),
+        ),
         Div(id="game-redirect"),
-        H2(f"Game Code: {game_code}"),
-        GameBoard(game, is_update=False),
-        _score_row(game),
-        NextGameButton(game, is_update=False)
-        if (role == repr(GameRole.SPYMASTER)) or (role == repr(GameRole.OPERATIVE))
-        else NextGameButton(game, enabled=False, is_update=False),
-        ConfirmButton(game.code, is_update=False)
-        if (role == repr(GameRole.SPYMASTER)) or (role == repr(GameRole.OPERATIVE))
-        else None,
+        Div(cls="d-flex align-items-center gap-2 mb-1")(
+            H2(f"Game Code: {game_code}", cls="mb-0"),
+            FullScreenButton(),
+        ),
+        GameBoard(
+            game,
+            is_update=False,
+            game_over=game.winner is not None,
+            viewer_is_spymaster=role == repr(GameRole.SPYMASTER),
+        ),
+        _BottomPanel(
+            game,
+            (
+                NextGameButton(game, is_update=False)
+                if (role == repr(GameRole.SPYMASTER))
+                or (role == repr(GameRole.OPERATIVE))
+                else NextGameButton(game, enabled=False, is_update=False)
+            ),
+            (
+                ConfirmButton(game.code, is_update=False)
+                if (role == repr(GameRole.SPYMASTER))
+                or (role == repr(GameRole.OPERATIVE))
+                else None
+            ),
+        ),
         WinModal(game, is_update=False),
         MessageStack(),
     )
@@ -903,8 +1236,12 @@ def play_game(request: Request, role: str | None = None, join: str | None = None
 # everything is an oob swap to make it easier to maybe do web connections later for
 #   updating the game state
 # could implement caching on each game
-async def updated_game(game_code: str, last_updated: str | None, viewer_token: str | None = None):
-    last_updated_date = datetime.fromisoformat(last_updated) if last_updated else None
+async def updated_game(
+    game_code: str, last_updated: str | None, viewer_token: str | None = None
+):
+    last_updated_date = (
+        datetime.fromisoformat(last_updated) if last_updated else None
+    )
     # could maybe do a smaller query since a lot requests are expected to not change
     game = session.scalar(
         select(Game)
@@ -918,13 +1255,21 @@ async def updated_game(game_code: str, last_updated: str | None, viewer_token: s
     if game.last_updated == last_updated_date:
         return
 
-    red_guessed = len([c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed])
+    red_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.RED and c.is_guessed]
+    )
     red = len([c for c in game.cards if c.kind == GameCardKind.RED])
-    blue_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed])
+    blue_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.BLUE and c.is_guessed]
+    )
     blue = len([c for c in game.cards if c.kind == GameCardKind.BLUE])
-    black_guessed = len([c for c in game.cards if c.kind == GameCardKind.BLACK and c.is_guessed])
+    black_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.BLACK and c.is_guessed]
+    )
     black = len([c for c in game.cards if c.kind == GameCardKind.BLACK])
-    tan_guessed = len([c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed])
+    tan_guessed = len(
+        [c for c in game.cards if c.kind == GameCardKind.TAN and c.is_guessed]
+    )
     tan = len([c for c in game.cards if c.kind == GameCardKind.TAN])
 
     # Compute per-viewer selection visibility for warden games
@@ -934,18 +1279,57 @@ async def updated_game(game_code: str, last_updated: str | None, viewer_token: s
         visible_tokens = get_visible_tokens(game, viewer_token)
 
     # Winner color overrides active-team background
-    display_team = game.winner if game.winner in ("RED", "BLUE") else game.active_team
+    display_team = (
+        game.winner if game.winner in ("RED", "BLUE") else game.active_team
+    )
+
+    # Determine viewer role for game-over card rendering
+    game_over = game.winner is not None
+    viewer_is_spymaster = False
+    if game_over and viewer_token and game_session.has_warden:
+        pr = get_player_session_role(game.session_id, viewer_token)
+        viewer_is_spymaster = pr is not None and pr.role == "SPYMASTER"
+
+    # On game over, reveal all cards; otherwise only send newly guessed ones
+    cards_to_broadcast = (
+        game.cards if game_over else [c for c in game.cards if c.is_guessed]
+    )
 
     return (
-        *[CardBoard(c, game) for c in game.cards if c.is_guessed],
-        Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(f"{red_guessed}/{red}"),
-        Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(f"{blue_guessed}/{blue}"),
-        Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(f"{black_guessed}/{black}"),
-        Span(id=repr(GameCardKind.TAN), hx_swap_oob="true")(f"{tan_guessed}/{tan}"),
+        *[
+            CardBoard(
+                c,
+                game,
+                game_over=game_over,
+                viewer_is_spymaster=viewer_is_spymaster,
+                is_warden_game=game_session.has_warden,
+            )
+            for c in cards_to_broadcast
+        ],
+        Span(id=repr(GameCardKind.RED), hx_swap_oob="true")(
+            f"{red_guessed}/{red}"
+        ),
+        Span(id=repr(GameCardKind.BLUE), hx_swap_oob="true")(
+            f"{blue_guessed}/{blue}"
+        ),
+        Span(id=repr(GameCardKind.BLACK), hx_swap_oob="true")(
+            f"{black_guessed}/{black}"
+        ),
+        Span(id=repr(GameCardKind.TAN), hx_swap_oob="true")(
+            f"{tan_guessed}/{tan}"
+        ),
         NextGameButton(game),
         Selections(game, visible_tokens=visible_tokens),
-        TurnIndicator(game.active_team, game.winner) if game_session.has_warden else None,
-        TeamBackground(display_team) if (game_session.has_warden or game.winner) else None,
+        (
+            TurnIndicator(game.active_team, game.winner)
+            if game_session.has_warden
+            else None
+        ),
+        (
+            TeamBackground(display_team)
+            if (game_session.has_warden or game.winner)
+            else None
+        ),
         WinModal(game, viewer_token),
     )
 
@@ -956,7 +1340,9 @@ class WebSocketPlayerData:
     game_code: str
     last_updated: str | None = None  # isoformatted
     token: str | None = None  # session token for personalized updates
-    join_code: str | None = None  # join code carried in URL — used to preserve it in redirects
+    join_code: str | None = (
+        None  # join code carried in URL — used to preserve it in redirects
+    )
 
 
 players: dict[str, WebSocketPlayerData] = {}
@@ -968,7 +1354,11 @@ async def broadcast_redirect(old_game_code: str, new_game_code: str):
     for uid, player in dict(players).items():
         if player.game_code != old_game_code:
             continue
-        new_url = f"{base_url}?join={player.join_code}" if player.join_code else base_url
+        new_url = (
+            f"{base_url}?join={player.join_code}"
+            if player.join_code
+            else base_url
+        )
         html = to_xml(
             Div(id="game-redirect", hx_swap_oob="true")(
                 Script(f"window.location.href = '{new_url}';")
@@ -983,11 +1373,15 @@ async def broadcast_redirect(old_game_code: str, new_game_code: str):
 async def update_game():
     for uid, player in dict(players).items():
         try:
-            game = session.scalar(select(Game).where(Game.code == player.game_code))
+            game = session.scalar(
+                select(Game).where(Game.code == player.game_code)
+            )
             if game is None:
                 del players[uid]
                 continue
-            fhtml_game = await updated_game(player.game_code, player.last_updated, player.token)
+            fhtml_game = await updated_game(
+                player.game_code, player.last_updated, player.token
+            )
             if fhtml_game is None:
                 # case where game shouldn't be updated
                 print("skipping send")
@@ -1006,17 +1400,26 @@ class PlayConnect(WebSocketEndpoint):
         await websocket.accept()
         game_code = websocket.path_params["game_code"]
         self.uuid = str(uuid.uuid4())
-        token = websocket.session.get(SITE_TOKEN) if hasattr(websocket, "session") else None
+        token = (
+            websocket.session.get(SITE_TOKEN)
+            if hasattr(websocket, "session")
+            else None
+        )
         join_code = websocket.query_params.get("join")
         players[self.uuid] = WebSocketPlayerData(
-            websocket=websocket, game_code=game_code, token=token, join_code=join_code
+            websocket=websocket,
+            game_code=game_code,
+            token=token,
+            join_code=join_code,
         )
 
     async def on_disconnect(self, websocket: WebSocket, close_code: int):
         del players[self.uuid]
 
 
-app.add_websocket_route("/play-connect/{game_code:str}", PlayConnect, name="play_connect")
+app.add_websocket_route(
+    "/play-connect/{game_code:str}", PlayConnect, name="play_connect"
+)
 
 
 @app.post(f"{PARTIALS_PREFIX}/guess_card/{{game_code:str}}")
@@ -1032,7 +1435,10 @@ async def guess(request: Request, game_card_id: int):
         token = request.session.get(SITE_TOKEN)
         player_role = get_player_session_role(game.session_id, token)
         if player_role is not None and player_role.role == "SPYMASTER":
-            return Message(Div("Spymasters cannot confirm guesses in warden mode"), kind=MessageKind.WARNING)
+            return Message(
+                Div("Spymasters cannot confirm guesses in warden mode"),
+                kind=MessageKind.WARNING,
+            )
 
     game_card.is_guessed = True
     check_and_set_winner(game)
@@ -1054,13 +1460,17 @@ async def end_turn(request: Request):
     if game is None:
         return Message(Div("Game not found"), kind=MessageKind.ERROR)
     if not game.session.has_warden or token != game.session.warden_token:
-        return Message(Div("Only the warden can end turns"), kind=MessageKind.ERROR)
+        return Message(
+            Div("Only the warden can end turns"), kind=MessageKind.ERROR
+        )
 
     game.active_team = "BLUE" if game.active_team == "RED" else "RED"
     game.last_updated = datetime.now()
     session.commit()
     await update_game()
-    return TurnIndicator(game.active_team, game.winner), TeamBackground(game.active_team)
+    return TurnIndicator(game.active_team, game.winner), TeamBackground(
+        game.active_team
+    )
 
 
 @app.post(f"{PARTIALS_PREFIX}/auto_confirm/{{game_code:str}}")
@@ -1078,7 +1488,9 @@ async def auto_confirm_card(request: Request):
     if game is None:
         return Message(Div("Game not found"), kind=MessageKind.ERROR)
     if not game.session.has_warden or token != game.session.warden_token:
-        return Message(Div("Only the warden can auto-confirm"), kind=MessageKind.ERROR)
+        return Message(
+            Div("Only the warden can auto-confirm"), kind=MessageKind.ERROR
+        )
 
     # Get active team's non-spymaster tokens
     active_tokens = {
@@ -1103,7 +1515,10 @@ async def auto_confirm_card(request: Request):
             best_card = card
 
     if best_card is None or best_count == 0:
-        return Message(Div("No selections from active team to confirm"), kind=MessageKind.WARNING)
+        return Message(
+            Div("No selections from active team to confirm"),
+            kind=MessageKind.WARNING,
+        )
 
     best_card.is_guessed = True
     check_and_set_winner(game)
@@ -1118,7 +1533,9 @@ async def select_card(request: Request, game_card_id: int):
     game_code = request.path_params["game_code"]
     # i think there's a better sqlalchemy api for this query
     game = session.scalar(
-        select(Game).filter(Game.code == game_code).options(joinedload(Game.session))
+        select(Game)
+        .filter(Game.code == game_code)
+        .options(joinedload(Game.session))
     )
     game_exists = game is not None
     assert game_exists
@@ -1130,9 +1547,14 @@ async def select_card(request: Request, game_card_id: int):
     game.last_updated = datetime.now()
     session.commit()
     current_selection = session.scalar(
-        select(Selection).filter(Selection.token == token).filter(Selection.game_code == game_code)
+        select(Selection)
+        .filter(Selection.token == token)
+        .filter(Selection.game_code == game_code)
     )
-    if current_selection is not None and current_selection.card_phrase == card.card_phrase:
+    if (
+        current_selection is not None
+        and current_selection.card_phrase == card.card_phrase
+    ):
         # they reselected the same card so unselect it
         session.delete(current_selection)
         session.commit()

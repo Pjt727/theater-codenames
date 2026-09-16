@@ -10,6 +10,19 @@ load_dotenv()
 SITE_URL = os.environ.get("SITE_URL", "http://localhost:5001").rstrip("/")
 
 _hdrs = (
+    Link(rel="icon", href="/assets/favicon.svg", type="image/svg+xml"),
+    Style("""
+        body {
+            background-image: url('/assets/impiricus-wave.svg');
+            background-repeat: no-repeat;
+            background-position: bottom center;
+            background-size: 100% auto;
+            background-attachment: fixed;
+        }
+        .btn[class*="btn-outline"] {
+            background-color: rgba(255, 255, 255, 0.88) !important;
+        }
+    """),
     # boostrap cdn v5.3
     Link(
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
