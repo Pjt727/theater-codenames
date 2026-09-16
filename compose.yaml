@@ -1,0 +1,11 @@
+services:
+  theater-codenames:
+    build: .
+    image: theater-codenames
+    ports:
+      - "727:5001"
+    volumes:
+      - theater-codenames-data:/data
+
+volumes:
+  theater-codenames-data:

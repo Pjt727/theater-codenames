@@ -1,3 +1,4 @@
+import os
 from typing import Type, TypeVar, Tuple
 from sqlalchemy import create_engine, Integer, select, Select, text, inspect as sa_inspect
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -23,7 +24,9 @@ class Base(DeclarativeBase):
 
 
 # Database configuration
-DB_URI = "sqlite:///cards.db"
+# Absolute paths need sqlite:////path (four slashes); relative stays sqlite:///file.db
+DB_PATH = os.environ.get("DB_PATH", "cards.db")
+DB_URI = f"sqlite:///{DB_PATH}"
 # Create the engine and session
 engine = create_engine(DB_URI)
 session = Session(engine)
