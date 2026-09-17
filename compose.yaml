@@ -4,6 +4,10 @@ services:
     image: theater-codenames
     ports:
       - "727:5001"
+    environment:
+      # Forwarded from the host env or a project-root .env file:
+      #   SITE_URL=https://example.com docker compose up -d --build
+      SITE_URL: ${SITE_URL:-http://localhost:727}
     volumes:
       - theater-codenames-data:/data
 
